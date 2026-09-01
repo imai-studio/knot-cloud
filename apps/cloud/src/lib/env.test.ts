@@ -14,6 +14,7 @@ const required = {
   AUTH_BASE_URL: "https://app.knot.test",
   DATABASE_URL: "postgres://knot_app:secret@db.test/knot",
   AUTH_SECRET: "a".repeat(32),
+  CRON_SECRET: "c".repeat(32),
   API_KEY_PEPPER: "p".repeat(32),
   API_KEY_PEPPER_VERSION: "1",
   IDENTITY_DIGEST_PEPPER: "i".repeat(32),

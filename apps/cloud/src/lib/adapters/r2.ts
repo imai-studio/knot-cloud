@@ -346,6 +346,8 @@ export class R2PrivateObjectStore implements ObjectStore {
         expiresIn: input.expiresInSeconds,
       }),
       requiredHeaders: {
+        "cache-control": privateObjectCacheControl,
+        "content-length": String(input.contentLength),
         "content-type": input.contentType,
         "if-none-match": "*",
       },

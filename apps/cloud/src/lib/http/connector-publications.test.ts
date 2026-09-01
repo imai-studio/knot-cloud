@@ -4,6 +4,9 @@ import {
 } from "@imai/knot-cloud-contract";
 import { describe, expect, it, vi } from "vitest";
 
+import { ObjectSizeError } from "@/lib/adapters/r2";
+import { ConnectorAuthenticationError } from "@/lib/security/connector-auth";
+
 import { createConnectorPublicationHandlers } from "./connector-publications";
 
 const connectorId = "00000000-0000-4000-8000-000000000011";
@@ -144,7 +147,124 @@ describe("connector publication HTTP service", () => {
     expect(response.status).toBe(413);
     expect(authenticated).toBe(false);
   });
+
+  it("includes server time in a clock-skew problem", async () => {
+    const service = createConnectorPublicationHandlers({
+      service: {
+        requestAssetUpload: vi.fn(),
+        commitAssetUpload: vi.fn(),
+        publish: vi.fn(),
+      },
+      connectors: { findActiveConnector: () => Promise.resolve(undefined) },
+      nonces: { claim: () => Promise.resolve("claimed") },
+      allowedAuthorities: ["knot.test"],
+      authenticate: () =>
+        Promise.reject(new ConnectorAuthenticationError("clock-skew", 401)),
+    });
+
+    const before = Math.floor(Date.now() / 1_000);
+    const response = await service.requestAsset(
+      request(`/api/v1/connectors/${connectorId}/assets/request`, {}),
+      connectorId,
+    );
+    const after = Math.floor(Date.now() / 1_000);
+    const body = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(401);
+    expect(body.code).toBe("clock-skew");
+    expect(body.serverUnixSeconds).toBeGreaterThanOrEqual(before);
+    expect(body.serverUnixSeconds).toBeLessThanOrEqual(after);
+  });
+
+  it("maps object size failures to payload-too-large", async () => {
+    const service = handlers();
+    service.service.requestAssetUpload.mockRejectedValue(
+      new ObjectSizeError("too large"),
+    );
+
+    const response = await service.handlers.requestAsset(
+      request(
+        `/api/v1/connectors/${connectorId}/assets/request`,
+        validAssetRequest(),
+      ),
+      connectorId,
+    );
+    const body = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(413);
+    expect(body.code).toBe("payload-too-large");
+    expect(body.retryable).toBe(false);
+  });
+
+  it("keeps known state conflicts distinct from server failures", async () => {
+    const conflict = handlers();
+    conflict.service.requestAssetUpload.mockRejectedValue(
+      Object.assign(new Error("duplicate"), { code: "23505" }),
+    );
+    const conflictResponse = await conflict.handlers.requestAsset(
+      request(
+        `/api/v1/connectors/${connectorId}/assets/request`,
+        validAssetRequest(),
+      ),
+      connectorId,
+    );
+    expect(conflictResponse.status).toBe(409);
+    expect(problemDetailsSchema.parse(await conflictResponse.json()).code).toBe(
+      "conflict",
+    );
+
+    const unknown = handlers();
+    unknown.service.requestAssetUpload.mockRejectedValue(
+      new Error("unexpected invariant"),
+    );
+    const unknownResponse = await unknown.handlers.requestAsset(
+      request(
+        `/api/v1/connectors/${connectorId}/assets/request`,
+        validAssetRequest(),
+      ),
+      connectorId,
+    );
+    const unknownBody = problemDetailsSchema.parse(
+      await unknownResponse.json(),
+    );
+    expect(unknownResponse.status).toBe(500);
+    expect(unknownBody.code).toBe("internal-error");
+    expect(unknownBody.retryable).toBe(true);
+  });
+
+  it("marks dependency outages as retryable service failures", async () => {
+    const service = handlers();
+    service.service.requestAssetUpload.mockRejectedValue(
+      Object.assign(new Error("database unavailable"), { code: "08006" }),
+    );
+    const response = await service.handlers.requestAsset(
+      request(
+        `/api/v1/connectors/${connectorId}/assets/request`,
+        validAssetRequest(),
+      ),
+      connectorId,
+    );
+    const body = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("dependency-unavailable");
+    expect(body.retryable).toBe(true);
+    expect(body.retryAfterSeconds).toBe(5);
+  });
 });
+
+function validAssetRequest() {
+  return {
+    protocolVersion: "1.0",
+    connectorId,
+    siteId,
+    sha256: "a".repeat(64),
+    byteSize: 100,
+    contentType: "image/png",
+    fileName: "cover.png",
+    idempotencyKey: "asset-request-0001",
+  };
+}
 
 function request(path: string, body: unknown): Request {
   return new Request(`https://knot.test${path}`, {

@@ -4,12 +4,14 @@ import {
   assetUploadRequestSchema,
   assetUploadResultSchema,
   protocolVersion,
+  publicationCreatedSchema,
   publicationMutationSchema,
 } from "@imai/knot-cloud-contract";
 import { ZodError, type ZodType } from "zod";
 
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
 import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
+import { ObjectSizeError } from "@/lib/adapters/r2";
 import { UpstashReplayNonceStore } from "@/lib/adapters/upstash-replay";
 import { createObjectStore } from "@/lib/adapters/factory";
 import { getSigningAuthorities } from "@/lib/env";
@@ -95,6 +97,10 @@ export function createConnectorPublicationHandlers(
               ? "authentication-required"
               : error.code,
           title: "Connector authentication failed",
+          serverUnixSeconds:
+            error.code === "clock-skew"
+              ? Math.floor(Date.now() / 1_000)
+              : undefined,
         });
       }
       if (error instanceof HttpProblem) {
@@ -113,17 +119,7 @@ export function createConnectorPublicationHandlers(
           title: "Request body does not match the protocol",
         });
       }
-      const code =
-        error instanceof Error && error.message === "asset-upload-missing"
-          ? "not-found"
-          : "conflict";
-      return problemResponse({
-        request,
-        status: code === "not-found" ? 404 : 409,
-        code,
-        title: "The publication operation could not be completed",
-        retryable: false,
-      });
+      return publicationProblem(request, error);
     }
   }
 
@@ -184,17 +180,125 @@ export function createConnectorPublicationHandlers(
       return execute(request, connectorId, async (body, tenantId) => {
         const mutation = parseJson(body, publicationMutationSchema);
         requireMatchingConnector(mutation.connectorId, connectorId);
+        const result = await dependencies.service.publish({
+          tenantId,
+          connectorId,
+          mutation,
+        });
         return jsonResponse(
-          await dependencies.service.publish({
-            tenantId,
-            connectorId,
-            mutation,
-          }),
+          publicationCreatedSchema.parse({ protocolVersion, ...result }),
           201,
         );
       });
     },
   };
+}
+
+function publicationProblem(request: Request, error: unknown): Response {
+  if (error instanceof ObjectSizeError) {
+    return problemResponse({
+      request,
+      status: 413,
+      code: "payload-too-large",
+      title: "The publication object exceeds the configured size limit",
+    });
+  }
+
+  const databaseCode = errorCode(error);
+  const message = error instanceof Error ? error.message : undefined;
+  if (message === "asset-upload-missing" || databaseCode === "P0002") {
+    return problemResponse({
+      request,
+      status: 404,
+      code: "not-found",
+      title: "The publication resource was not found",
+    });
+  }
+  if (message === "connector-mismatch" || databaseCode === "42501") {
+    return problemResponse({
+      request,
+      status: 403,
+      code: "forbidden",
+      title: "The connector is not authorized for this publication",
+    });
+  }
+  if (databaseCode === "22023") {
+    return problemResponse({
+      request,
+      status: 400,
+      code: "invalid-request",
+      title: "The publication request is invalid",
+    });
+  }
+  if (
+    message === "asset-size-mismatch" ||
+    message === "publication-digest-mismatch" ||
+    databaseCode === "22000" ||
+    databaseCode === "23505" ||
+    databaseCode === "55000"
+  ) {
+    return problemResponse({
+      request,
+      status: 409,
+      code:
+        message === "publication-digest-mismatch"
+          ? "digest-mismatch"
+          : "conflict",
+      title: "The publication operation conflicts with the stored state",
+    });
+  }
+  if (isDependencyFailure(error)) {
+    return problemResponse({
+      request,
+      status: 503,
+      code: "dependency-unavailable",
+      title: "A publication dependency is temporarily unavailable",
+      retryable: true,
+      retryAfterSeconds: 5,
+    });
+  }
+  return problemResponse({
+    request,
+    status: 500,
+    code: "internal-error",
+    title: "The publication operation could not be completed",
+    retryable: true,
+  });
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return undefined;
+  }
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function isDependencyFailure(error: unknown): boolean {
+  const code = errorCode(error);
+  if (
+    code?.startsWith("08") ||
+    code?.startsWith("53") ||
+    ["57P01", "57P02", "57P03"].includes(code ?? "")
+  ) {
+    return true;
+  }
+  if (!error || typeof error !== "object") return false;
+  const name =
+    "name" in error && typeof error.name === "string" ? error.name : "";
+  if (["AbortError", "TimeoutError"].includes(name)) return true;
+  if (
+    !("$metadata" in error) ||
+    !error.$metadata ||
+    typeof error.$metadata !== "object"
+  ) {
+    return false;
+  }
+  const status =
+    "httpStatusCode" in error.$metadata &&
+    typeof error.$metadata.httpStatusCode === "number"
+      ? error.$metadata.httpStatusCode
+      : undefined;
+  return status !== undefined && status >= 500;
 }
 
 export function createProductionConnectorPublicationHandlers() {

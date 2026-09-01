@@ -8,7 +8,7 @@ import type {
   SiteRecord,
 } from "@/lib/publications";
 
-import { withTenant } from "./neon";
+import { ensureRuntimeDatabaseRole, getSql, withTenant } from "./neon";
 
 export class NeonPublicationRepository implements PublicationRepository {
   async listSites(tenantId: string): Promise<SiteRecord[]> {
@@ -112,6 +112,7 @@ export class NeonPublicationRepository implements PublicationRepository {
     assetId: string;
     observedSha256: string;
     observedByteSize: number;
+    observedContentType: string;
   }) {
     const [rows = []] = await withTenant(input.tenantId, (transaction) => [
       transaction`
@@ -121,7 +122,8 @@ export class NeonPublicationRepository implements PublicationRepository {
           ${input.uploadId}::uuid,
           ${input.assetId}::uuid,
           ${input.observedSha256},
-          ${input.observedByteSize}
+          ${input.observedByteSize},
+          ${input.observedContentType}
         )
       `,
     ]);
@@ -250,6 +252,52 @@ export class NeonPublicationRepository implements PublicationRepository {
 }
 
 export class NeonDeletionOutboxRepository implements DeletionOutboxRepository {
+  async listMaintenanceTenants(input: {
+    now: Date;
+    graceSeconds: number;
+    limit: number;
+  }): Promise<string[]> {
+    await ensureRuntimeDatabaseRole();
+    const rows = await getSql()`
+      SELECT tenant_id FROM list_publication_maintenance_tenants(
+        ${input.now}, ${input.graceSeconds}, ${input.limit}
+      )
+    `;
+    return rows.map((row) => String(row.tenant_id));
+  }
+
+  async sweepOrphans(input: {
+    tenantId: string;
+    now: Date;
+    graceSeconds: number;
+    limit: number;
+  }): Promise<number> {
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT enqueue_publication_orphan_deletions(
+          ${input.tenantId}::uuid,
+          ${input.now},
+          ${input.graceSeconds},
+          ${input.limit}
+        ) AS enqueued
+      `,
+    ]);
+    return Number((rows[0] as { enqueued: number } | undefined)?.enqueued ?? 0);
+  }
+
+  async countDeadLetters(input: { tenantId: string }): Promise<number> {
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT count(*)::integer AS count
+        FROM deletion_outbox
+        WHERE tenant_id = ${input.tenantId}::uuid
+          AND completed_at IS NULL
+          AND dead_lettered_at IS NOT NULL
+      `,
+    ]);
+    return Number((rows[0] as { count: number } | undefined)?.count ?? 0);
+  }
+
   async claim(input: {
     tenantId: string;
     now: Date;

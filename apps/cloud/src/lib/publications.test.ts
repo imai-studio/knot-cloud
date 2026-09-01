@@ -107,11 +107,14 @@ describe("PublicationService", () => {
 });
 
 describe("PublicationDeletionWorker", () => {
-  it("completes successful deletes and retries failures without losing the tombstone", async () => {
+  it("batch deletes tombstoned objects before completing their fenced rows", async () => {
     const complete = vi.fn().mockResolvedValue(true);
     const retry = vi.fn().mockResolvedValue(true);
     const finalize = vi.fn().mockResolvedValue(false);
     const repository: DeletionOutboxRepository = {
+      listMaintenanceTenants: vi.fn(),
+      sweepOrphans: vi.fn(),
+      countDeadLetters: vi.fn().mockResolvedValue(0),
       claim: vi.fn().mockResolvedValue([
         {
           id: "00000000-0000-4000-8000-000000000051",
@@ -132,10 +135,7 @@ describe("PublicationDeletionWorker", () => {
       retry,
       finalize,
     };
-    const deleteTombstoned = vi
-      .fn()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("R2 unavailable"));
+    const deleteTombstoned = vi.fn().mockResolvedValue(undefined);
     const worker = new PublicationDeletionWorker(
       repository,
       objectStore({ deleteTombstoned }),
@@ -143,19 +143,59 @@ describe("PublicationDeletionWorker", () => {
 
     await expect(worker.drainTenant({ tenantId })).resolves.toEqual({
       claimed: 2,
-      deleted: 1,
-      retried: 1,
+      deleted: 2,
+      retried: 0,
       finalized: 0,
+      deadLettered: 0,
     });
-    expect(complete).toHaveBeenCalledOnce();
+    expect(deleteTombstoned).toHaveBeenCalledOnce();
+    expect(deleteTombstoned.mock.calls[0]?.[0]).toHaveLength(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(retry).not.toHaveBeenCalled();
+    expect(finalize).toHaveBeenCalledOnce();
+  });
+
+  it("retries every fenced row when a batch delete is not fully successful", async () => {
+    const retry = vi.fn().mockResolvedValue(true);
+    const repository: DeletionOutboxRepository = {
+      listMaintenanceTenants: vi.fn(),
+      sweepOrphans: vi.fn(),
+      countDeadLetters: vi.fn().mockResolvedValue(1),
+      claim: vi.fn().mockResolvedValue([
+        {
+          id: "00000000-0000-4000-8000-000000000051",
+          publicationId,
+          pathname: `tenants/${tenantId}/assets/aa/${"a".repeat(64)}`,
+          tombstonedAt: new Date(),
+          attempt: 12,
+        },
+      ]),
+      complete: vi.fn(),
+      retry,
+      finalize: vi.fn().mockResolvedValue(false),
+    };
+    const worker = new PublicationDeletionWorker(
+      repository,
+      objectStore({
+        deleteTombstoned: vi
+          .fn()
+          .mockRejectedValue(new Error("R2 unavailable")),
+      }),
+    );
+
+    await expect(worker.drainTenant({ tenantId })).resolves.toMatchObject({
+      claimed: 1,
+      deleted: 0,
+      retried: 1,
+      deadLettered: 1,
+    });
     expect(retry).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId,
         errorCode: "object-delete-failed",
-        delaySeconds: 4,
+        delaySeconds: 4096,
       }),
     );
-    expect(finalize).toHaveBeenCalledOnce();
   });
 });
 

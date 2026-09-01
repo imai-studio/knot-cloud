@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import {
   idempotencyKeySchema,
-  opaqueIdSchema,
   sha256Schema,
   unixSecondsSchema,
 } from "./identifiers.js";
@@ -20,8 +19,8 @@ export const mediaTypeSchema = z
 export const assetUploadRequestSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    connectorId: opaqueIdSchema,
-    siteId: opaqueIdSchema,
+    connectorId: z.uuid(),
+    siteId: z.uuid(),
     sha256: sha256Schema,
     byteSize: z.number().int().min(1).max(maximumAssetBytes),
     contentType: mediaTypeSchema,
@@ -45,8 +44,8 @@ const uploadHeaderNameSchema = z
 export const assetUploadCreatedSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    assetId: opaqueIdSchema,
-    uploadId: opaqueIdSchema,
+    assetId: z.uuid(),
+    uploadId: z.uuid(),
     method: z.literal("PUT"),
     uploadUrl: z.url().refine((value) => isSecureOrLoopbackUrl(value), {
       message: "Upload URL must use HTTPS or loopback HTTP",
@@ -61,8 +60,8 @@ export const assetUploadCreatedSchema = z
 export const assetUploadCommitSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    assetId: opaqueIdSchema,
-    uploadId: opaqueIdSchema,
+    assetId: z.uuid(),
+    uploadId: z.uuid(),
     expectedSha256: sha256Schema,
     expectedByteSize: z.number().int().min(1).max(maximumAssetBytes),
     idempotencyKey: idempotencyKeySchema,
@@ -73,7 +72,7 @@ export const assetUploadResultSchema = z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("verified"),
-      assetId: opaqueIdSchema,
+      assetId: z.uuid(),
       sha256: sha256Schema,
       byteSize: z.number().int().min(1).max(maximumAssetBytes),
       verifiedAt: unixSecondsSchema,
@@ -82,7 +81,7 @@ export const assetUploadResultSchema = z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("rejected"),
-      assetId: opaqueIdSchema,
+      assetId: z.uuid(),
       reason: z.enum(["digest-mismatch", "size-mismatch", "upload-missing"]),
     })
     .strict(),

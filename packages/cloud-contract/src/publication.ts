@@ -1,10 +1,9 @@
 import { z } from "zod";
 
-import {
-  idempotencyKeySchema,
-  opaqueIdSchema,
-  sha256Schema,
-} from "./identifiers.js";
+import { idempotencyKeySchema, sha256Schema } from "./identifiers.js";
+import { protocolVersion } from "./protocol.js";
+
+const resourceIdSchema = z.uuid();
 
 const textMarkSchema = z.enum([
   "bold",
@@ -92,44 +91,76 @@ export const publicationDocumentSchema = z.object({
   blocks: z.array(publicationBlockSchema).max(10_000),
 });
 
-export const publicationMutationSchema = z.object({
-  connectorId: opaqueIdSchema,
-  siteId: opaqueIdSchema,
-  publicationId: opaqueIdSchema,
-  slug: z
-    .string()
-    .regex(/^[a-z0-9](?:[a-z0-9/_-]{0,198}[a-z0-9])?$/u)
-    .refine(
-      (value) => !value.includes("//"),
-      "Slug cannot contain consecutive slashes",
-    )
-    .refine(
-      (value) =>
-        !["api", "_next", "www", "admin", "health", "assets"].includes(
-          value.split("/")[0]!,
-        ),
-      "Slug uses a reserved prefix",
-    ),
-  operation: z.enum(["create", "update"]),
-  document: publicationDocumentSchema,
-  contentSha256: sha256Schema,
-  assetDigests: z.array(sha256Schema).max(1_000),
-  idempotencyKey: idempotencyKeySchema,
-});
+export const publicationMutationSchema = z
+  .object({
+    connectorId: resourceIdSchema,
+    siteId: resourceIdSchema,
+    publicationId: resourceIdSchema,
+    slug: z
+      .string()
+      .regex(/^[a-z0-9](?:[a-z0-9/_-]{0,198}[a-z0-9])?$/u)
+      .refine(
+        (value) => !value.includes("//"),
+        "Slug cannot contain consecutive slashes",
+      )
+      .refine(
+        (value) =>
+          !["api", "_next", "www", "admin", "health", "assets"].includes(
+            value.split("/")[0]!,
+          ),
+        "Slug uses a reserved prefix",
+      ),
+    operation: z.enum(["create", "update"]),
+    document: publicationDocumentSchema,
+    contentSha256: sha256Schema,
+    assetDigests: z.array(sha256Schema).max(1_000),
+    idempotencyKey: idempotencyKeySchema,
+  })
+  .superRefine((value, context) => {
+    const declared = new Set(value.assetDigests);
+    if (declared.size !== value.assetDigests.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["assetDigests"],
+        message: "Asset digests must be unique",
+      });
+    }
+    for (const [index, block] of value.document.blocks.entries()) {
+      if (
+        (block.type === "file" || block.type === "image") &&
+        !declared.has(block.assetDigest)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["document", "blocks", index, "assetDigest"],
+          message: "Every document asset must be declared in assetDigests",
+        });
+      }
+    }
+  });
+
+export const publicationCreatedSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    publicationId: resourceIdSchema,
+    versionId: resourceIdSchema,
+    state: z.literal("ready"),
+  })
+  .strict();
 
 export const publicationControlOperationSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("publication.disable"),
-    publicationId: opaqueIdSchema,
+    publicationId: resourceIdSchema,
   }),
   z.object({
     type: z.literal("publication.rollback"),
-    publicationId: opaqueIdSchema,
-    versionId: opaqueIdSchema,
+    publicationId: resourceIdSchema,
+    versionId: resourceIdSchema,
   }),
   z.object({
     type: z.literal("publication.unpublish"),
-    publicationId: opaqueIdSchema,
+    publicationId: resourceIdSchema,
   }),
 ]);
 
@@ -137,21 +168,21 @@ export const publicationControlResultSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("publication.disable"),
-      publicationId: opaqueIdSchema,
+      publicationId: resourceIdSchema,
       disabledAt: z.number().int().nonnegative(),
     })
     .strict(),
   z
     .object({
       type: z.literal("publication.rollback"),
-      publicationId: opaqueIdSchema,
-      currentVersionId: opaqueIdSchema,
+      publicationId: resourceIdSchema,
+      currentVersionId: resourceIdSchema,
     })
     .strict(),
   z
     .object({
       type: z.literal("publication.unpublish"),
-      publicationId: opaqueIdSchema,
+      publicationId: resourceIdSchema,
       unpublishedAt: z.number().int().nonnegative(),
     })
     .strict(),

@@ -56,8 +56,9 @@ compatibility origin for the imai deployment.
 
 ## Configuration
 
-The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `IDENTITY_DIGEST_PEPPER`,
-`KNOT_ALLOWED_EMAILS`, and `RESEND_API_KEY`. Set `AUTH_TRUSTED_ORIGINS` to a comma-separated list
+The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `CRON_SECRET`, `EMAIL_FROM`,
+`IDENTITY_DIGEST_PEPPER`, `KNOT_ALLOWED_EMAILS`, and `RESEND_API_KEY`. Set
+`AUTH_TRUSTED_ORIGINS` to a comma-separated list
 when the same deployment is served from additional domains. `KNOT_ALLOWED_EMAILS` is a
 comma-separated operator allowlist; removing an address revokes its dashboard access on the next
 request. Keep the Resend key sending-only and restrict it to the configured sender domain. Never

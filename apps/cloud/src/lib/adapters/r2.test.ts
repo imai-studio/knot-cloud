@@ -50,6 +50,37 @@ async function consume(
 }
 
 describe("R2PrivateObjectStore", () => {
+  it("returns every caller-controlled header required by a presigned upload", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = new S3Client({
+      region: "auto",
+      endpoint: "https://test-account.r2.cloudflarestorage.com",
+      credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    const signed = await store.createPresignedAssetUpload({
+      locator: object,
+      contentLength: bytes.byteLength,
+      contentType: "image/png",
+      expiresInSeconds: 600,
+    });
+    const url = new URL(signed.uploadUrl);
+
+    expect(signed.requiredHeaders).toEqual({
+      "cache-control": privateObjectCacheControl,
+      "content-length": "3",
+      "content-type": "image/png",
+      "if-none-match": "*",
+    });
+    expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";")).toEqual(
+      expect.arrayContaining(["content-length", "host", "if-none-match"]),
+    );
+    expect(url.searchParams.get("x-amz-meta-sha256")).toBe(object.sha256);
+    expect(url.searchParams.get("x-amz-meta-tenant-id")).toBe(tenantA);
+  });
+
   it("derives tenant-scoped keys and rejects caller-controlled path data", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const first = objectKeyFor(locator(bytes));

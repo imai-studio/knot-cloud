@@ -13,6 +13,7 @@ const required = [
   "APP_BASE_URL",
   "AUTH_BASE_URL",
   "AUTH_SECRET",
+  "CRON_SECRET",
   "API_KEY_PEPPER",
   "API_KEY_PEPPER_VERSION",
   "DATABASE_URL",

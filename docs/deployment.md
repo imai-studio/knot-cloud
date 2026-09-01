@@ -30,6 +30,11 @@ Use the migration-created `knot_app` credential as `DATABASE_URL`.
 Start from [`apps/cloud/.env.example`](../apps/cloud/.env.example). Generate independent random
 values for every secret and pepper. Do not copy the example placeholders into production.
 
+Set `CRON_SECRET` to a dedicated random value of at least 32 characters. Vercel sends it as a
+bearer credential to the scheduled publication-maintenance route. Self-hosted schedulers must call
+the same route with `Authorization: Bearer <CRON_SECRET>`. Do not reuse `AUTH_SECRET` or an API-key
+pepper.
+
 Configure R2 by following [`object-storage.md`](object-storage.md). Keep both public access methods
 disabled on the bucket. `CONTENT_BASE_URL` is not part of the current environment contract.
 
@@ -64,6 +69,11 @@ After deployment, verify:
 curl --fail --show-error https://<dashboard-host>/api/health
 curl --fail --show-error https://<dashboard-host>/api/v1/meta
 ```
+
+When publication lifecycle code is part of the candidate, invoke
+`/api/internal/publications/maintenance` once with the cron bearer credential. A successful empty
+pass returns `200`; a `500` indicates a tenant failure or a deletion dead letter and must block
+promotion.
 
 Confirm that the R2 smoke object was deleted and that the bucket still has no `r2.dev` URL or custom
 domain. Record the deployment and check results in [`p0-verification.md`](p0-verification.md).

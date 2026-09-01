@@ -76,6 +76,7 @@ export interface PublicationRepository {
     assetId: string;
     observedSha256: string;
     observedByteSize: number;
+    observedContentType: string;
   }): Promise<{
     assetId: string;
     sha256: string;
@@ -129,23 +130,34 @@ export class PublicationService {
     idempotencyKey: string;
   }) {
     const locator = { tenantId: input.tenantId, sha256: input.sha256 };
-    const signed = await this.objects.createPresignedAssetUpload({
-      locator,
-      contentLength: input.byteSize,
-      contentType: input.contentType,
-      expiresInSeconds: 600,
-    });
+    const requestedExpiresAt = new Date(Date.now() + 600_000);
     const prepared = await this.repository.prepareAssetUpload({
       ...input,
       assetId: randomUUID(),
       uploadId: randomUUID(),
       pathname: assetPath(locator),
-      expiresAt: signed.expiresAt,
+      expiresAt: requestedExpiresAt,
+    });
+    const signed = await this.objects.createPresignedAssetUpload({
+      locator,
+      contentLength: input.byteSize,
+      contentType: input.contentType,
+      expiresInSeconds: Math.max(
+        30,
+        Math.min(
+          600,
+          Math.floor((prepared.expiresAt.getTime() - Date.now()) / 1_000),
+        ),
+      ),
     });
     return {
       ...prepared,
       uploadUrl: signed.uploadUrl,
       requiredHeaders: signed.requiredHeaders,
+      expiresAt:
+        prepared.expiresAt < signed.expiresAt
+          ? prepared.expiresAt
+          : signed.expiresAt,
     };
   }
 
@@ -169,6 +181,7 @@ export class PublicationService {
       ...input,
       observedSha256: object.sha256,
       observedByteSize: object.size,
+      observedContentType: object.contentType,
     });
   }
 
@@ -298,6 +311,18 @@ export interface DeletionOutboxItem {
 }
 
 export interface DeletionOutboxRepository {
+  listMaintenanceTenants(input: {
+    now: Date;
+    graceSeconds: number;
+    limit: number;
+  }): Promise<string[]>;
+  sweepOrphans(input: {
+    tenantId: string;
+    now: Date;
+    graceSeconds: number;
+    limit: number;
+  }): Promise<number>;
+  countDeadLetters(input: { tenantId: string }): Promise<number>;
   claim(input: {
     tenantId: string;
     now: Date;
@@ -336,6 +361,7 @@ export class PublicationDeletionWorker {
     deleted: number;
     retried: number;
     finalized: number;
+    deadLettered: number;
   }> {
     const now = new Date();
     const leaseToken = randomBytes(32).toString("base64url");
@@ -352,14 +378,16 @@ export class PublicationDeletionWorker {
     const publications = new Set<string>();
     for (const item of items) {
       if (item.publicationId) publications.add(item.publicationId);
-      try {
-        await this.objects.deleteTombstoned([
-          {
-            tenantId: input.tenantId,
-            key: item.pathname,
-            tombstonedAt: item.tombstonedAt,
-          },
-        ]);
+    }
+    try {
+      await this.objects.deleteTombstoned(
+        items.map((item) => ({
+          tenantId: input.tenantId,
+          key: item.pathname,
+          tombstonedAt: item.tombstonedAt,
+        })),
+      );
+      for (const item of items) {
         if (
           await this.repository.complete({
             tenantId: input.tenantId,
@@ -370,8 +398,10 @@ export class PublicationDeletionWorker {
         ) {
           deleted += 1;
         }
-      } catch {
-        const delaySeconds = Math.min(3_600, 2 ** Math.min(item.attempt, 11));
+      }
+    } catch {
+      for (const item of items) {
+        const delaySeconds = Math.min(86_400, 2 ** Math.min(item.attempt, 16));
         if (
           await this.repository.retry({
             tenantId: input.tenantId,
@@ -397,7 +427,16 @@ export class PublicationDeletionWorker {
         finalized += 1;
       }
     }
-    return { claimed: items.length, deleted, retried, finalized };
+    const deadLettered = await this.repository.countDeadLetters({
+      tenantId: input.tenantId,
+    });
+    return {
+      claimed: items.length,
+      deleted,
+      retried,
+      finalized,
+      deadLettered,
+    };
   }
 }
 

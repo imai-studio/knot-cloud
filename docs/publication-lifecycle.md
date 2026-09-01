@@ -35,10 +35,18 @@ ready version. Unpublish does three things in one database transaction:
 3. creates deletion outbox rows for every bundle and every asset not used by another live
    publication.
 
-The deletion worker claims rows with `SKIP LOCKED`, a random lease digest, and an expiry. Completion
-requires the same live lease. Failures clear the lease and set a bounded retry time. The worker
-removes publication records only after every outbox row completes. Audit data may retain keyed
-digests and operational metadata, but it must not retain the deleted document or media.
+Vercel invokes the authenticated maintenance route every ten minutes. Self-hosted operators call
+the same route with the dedicated `CRON_SECRET`. The worker discovers due tenants through a narrow
+schedule table, then claims rows with `SKIP LOCKED`, a random lease digest, and an expiry. It batches
+R2 deletion and requires the same live lease before completing each row. After 12 failed claims, a
+row moves to a visible dead-letter state and the cron request fails until an operator intervenes.
+The publication remains tombstoned and is not falsely reported as deleted.
+
+The worker also queues abandoned presigned uploads and verified assets that remain unreferenced
+after a 24-hour grace period. Asset-digest advisory locks and a pending-deletion check prevent an
+old unpublish from deleting bytes that a new live publication has reused. The worker removes a
+publication record only after every outbox row completes. Audit data may retain keyed digests and
+operational metadata, but it must not retain the deleted document or media.
 
 ## Recovery rules
 
@@ -47,6 +55,9 @@ digests and operational metadata, but it must not retain the deleted document or
   and immutable path before attempting the active-pointer transaction again.
 - A failed asset verification never creates a site asset.
 - A stale deletion lease cannot complete or reschedule a newer attempt.
+- A resumed upload request extends an unverified upload lease and returns a fresh presigned URL.
+- Asset verification compares SHA-256, exact length, and media type before recording the asset.
+- Every image or file block must declare its digest in the publication asset list.
 - R2 deletion is idempotent. Database tombstones remain authoritative while R2 is unavailable.
 - Every repository call sets the tenant transaction context. Cross-tenant identifiers fail under
   forced row-level security and composite foreign keys.
@@ -59,5 +70,4 @@ Before release:
 - run the managed-Neon two-tenant and lease-fencing tests;
 - run large direct-to-R2 upload and interruption tests against the production candidate;
 - provision a separate reader domain and pass its browser security tests;
-- add an authenticated worker trigger or scheduler that calls the durable deletion worker;
 - record destructive-unpublish failure injection and immediate not-found evidence.

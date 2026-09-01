@@ -94,14 +94,17 @@ export function SitesPanel({
 
   async function control(
     publicationId: string,
-    type: "publication.disable" | "publication.unpublish",
+    operation:
+      | { type: "publication.disable" }
+      | { type: "publication.unpublish" }
+      | { type: "publication.rollback"; versionId: string },
   ) {
     const response = await fetch(
       `/api/v1/session/publications/${publicationId}/control`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify(operation),
       },
     );
     if (!response.ok) {
@@ -110,9 +113,11 @@ export function SitesPanel({
     }
     if (selectedSiteId) await loadPublications(selectedSiteId);
     setMessage(
-      type === "publication.unpublish"
+      operation.type === "publication.unpublish"
         ? "Unpublished. Private bytes are queued for deletion."
-        : "Publication disabled.",
+        : operation.type === "publication.rollback"
+          ? "Publication enabled at its latest ready version."
+          : "Publication disabled.",
     );
   }
 
@@ -227,13 +232,26 @@ export function SitesPanel({
                             size="sm"
                             variant="outline"
                             onClick={() =>
-                              void control(
-                                publication.id,
-                                "publication.disable",
-                              )
+                              void control(publication.id, {
+                                type: "publication.disable",
+                              })
                             }
                           >
                             Disable
+                          </Button>
+                        ) : publication.currentVersionId ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              void control(publication.id, {
+                                type: "publication.rollback",
+                                versionId: publication.currentVersionId!,
+                              })
+                            }
+                          >
+                            Enable
                           </Button>
                         ) : null}
                         <Button
@@ -241,10 +259,9 @@ export function SitesPanel({
                           size="sm"
                           variant="destructive"
                           onClick={() =>
-                            void control(
-                              publication.id,
-                              "publication.unpublish",
-                            )
+                            void control(publication.id, {
+                              type: "publication.unpublish",
+                            })
                           }
                         >
                           Unpublish
