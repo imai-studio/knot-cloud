@@ -142,6 +142,9 @@ export interface ClaimedCommand {
   requiredScope: string;
   payload: unknown;
   createdByKind: string;
+  actorDigest: string;
+  actorDigestVersion: number;
+  actorProvenance: string;
   createdAt: Date;
   notBefore: Date;
   expiresAt: Date;

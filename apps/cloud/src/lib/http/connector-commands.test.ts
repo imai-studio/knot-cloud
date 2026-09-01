@@ -67,6 +67,9 @@ describe("connector command HTTP service", () => {
           },
         },
         createdByKind: "consumer-api-key",
+        actorDigest: "a".repeat(64),
+        actorDigestVersion: 1,
+        actorProvenance: "consumer-api-key",
         createdAt: new Date("2026-09-01T00:00:00Z"),
         notBefore: new Date("2026-09-01T00:00:00Z"),
         expiresAt: new Date("2026-09-01T00:10:00Z"),
@@ -88,6 +91,11 @@ describe("connector command HTTP service", () => {
     const body = commandClaimResponseSchema.parse(await response.json());
     expect(body.commands).toHaveLength(1);
     expect(body.commands[0]?.commandId).toBe(commandId);
+    expect(body.commands[0]?.actor).toEqual({
+      principalDigest: "a".repeat(64),
+      digestVersion: 1,
+      provenance: "consumer-api-key",
+    });
     expect(claim).toHaveBeenCalledWith({
       tenantId,
       connectorId,
@@ -95,6 +103,47 @@ describe("connector command HTTP service", () => {
       leaseSeconds: 60,
     });
     expect(claim).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the explicit unverified legacy sentinel provenance", async () => {
+    const claim = vi.fn<CommandLedger["claim"]>().mockResolvedValue({
+      commandId,
+      requiredScope: "anytype.objects.read",
+      payload: {
+        domain: "anytype",
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      },
+      createdByKind: "first-party-service",
+      actorDigest: "0".repeat(64),
+      actorDigestVersion: 1,
+      actorProvenance: "unverified-legacy",
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      notBefore: new Date("2026-09-01T00:00:00Z"),
+      expiresAt: new Date("2026-09-01T00:10:00Z"),
+      attempt: 1,
+      leaseToken: "lease_token_1234567890abcdefghijklmnop",
+      leaseExpiresAt: new Date("2026-09-01T00:01:00Z"),
+    });
+    const response = await handlers(commands({ claim })).claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(200);
+    const body = commandClaimResponseSchema.parse(await response.json());
+    expect(body.commands[0]?.actor).toEqual({
+      principalDigest: "0".repeat(64),
+      digestVersion: 1,
+      provenance: "unverified-legacy",
+    });
   });
 
   it("rejects claims that ask for more than one command", async () => {
@@ -124,6 +173,9 @@ describe("connector command HTTP service", () => {
       requiredScope: "anytype.objects.read",
       payload: { domain: "anytype", operation: { type: "not-real" } },
       createdByKind: "consumer-api-key",
+      actorDigest: "a".repeat(64),
+      actorDigestVersion: 1,
+      actorProvenance: "consumer-api-key",
       createdAt: new Date("2026-09-01T00:00:00Z"),
       notBefore: new Date("2026-09-01T00:00:00Z"),
       expiresAt: new Date("2026-09-01T00:10:00Z"),

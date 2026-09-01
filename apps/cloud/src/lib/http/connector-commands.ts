@@ -29,11 +29,11 @@ import {
   type ConnectorRepository,
 } from "@/lib/security/connector-auth";
 
+import { readBoundedBody } from "./bounded-body";
 import { HttpProblem, jsonResponse, problemResponse } from "./problem";
 
 const maximumControlBodyBytes = 64 * 1024;
 const maximumResultBodyBytes = 1024 * 1024;
-
 type AuthenticatedConnector = {
   connectorId: string;
   tenantId: string;
@@ -49,61 +49,6 @@ export interface ConnectorCommandDependencies {
   problemBaseUrl: string;
   authenticate?: typeof authenticateConnectorRequest;
   now?: () => Date;
-}
-
-async function readBoundedBody(
-  request: Request,
-  maximumBodyBytes: number,
-): Promise<Uint8Array> {
-  const contentLength = request.headers.get("Content-Length");
-  if (contentLength !== null) {
-    const parsedLength = Number(contentLength);
-    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
-      throw new HttpProblem(
-        400,
-        "invalid-request",
-        "Content-Length is not a valid non-negative integer",
-      );
-    }
-    if (parsedLength > maximumBodyBytes) {
-      throw new HttpProblem(
-        413,
-        "payload-too-large",
-        "Request body is too large",
-      );
-    }
-  }
-  if (!request.body) return new Uint8Array();
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      length += value.byteLength;
-      if (length > maximumBodyBytes) {
-        await reader.cancel();
-        throw new HttpProblem(
-          413,
-          "payload-too-large",
-          "Request body is too large",
-        );
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  const body = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
 }
 
 function parseJson<T>(body: Uint8Array, schema: ZodType<T>): T {
@@ -273,6 +218,11 @@ export function createConnectorCommandHandlers(
                   connectorId: connector.connectorId,
                   requiredScope: command.requiredScope,
                   createdBy: command.createdByKind,
+                  actor: {
+                    principalDigest: command.actorDigest,
+                    digestVersion: command.actorDigestVersion,
+                    provenance: command.actorProvenance,
+                  },
                   createdAt: unixSeconds(command.createdAt),
                   notBefore: unixSeconds(command.notBefore),
                   expiresAt: unixSeconds(command.expiresAt),

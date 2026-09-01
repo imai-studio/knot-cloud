@@ -58,7 +58,8 @@ compatibility origin for the imai deployment.
 ## Configuration
 
 The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `CRON_SECRET`, `EMAIL_FROM`,
-`IDENTITY_DIGEST_PEPPER`, `KNOT_ALLOWED_EMAILS`, and `RESEND_API_KEY`. Set
+`IDENTITY_DIGEST_PEPPER`, `KNOT_ALLOWED_EMAILS`, `API_KEY_PEPPER`,
+`API_KEY_PEPPER_VERSION`, and `RESEND_API_KEY`. Set
 `AUTH_TRUSTED_ORIGINS` to a comma-separated list
 when the same deployment is served from additional domains. `KNOT_ALLOWED_EMAILS` is a
 comma-separated operator allowlist; removing an address revokes its dashboard access on the next
@@ -100,6 +101,8 @@ restricted `knot_app` role. See
   controls, provenance, and deletion behavior.
 - [`docs/public-reader.md`](docs/public-reader.md): isolated reader routes and Vercel/self-hosted
   deployment checks.
+- [`docs/scoped-data-api.md`](docs/scoped-data-api.md): P4 key controls, typed operation submission,
+  and status retrieval.
 - [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
 - [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned

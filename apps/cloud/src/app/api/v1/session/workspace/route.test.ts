@@ -17,6 +17,9 @@ vi.mock("@/lib/workspace-auth", () => ({
   getAuthorizedWorkspace: vi.fn(),
   selectAuthorizedWorkspace: vi.fn(),
 }));
+vi.mock("@/lib/env", () => ({
+  getAppBaseUrl: () => "https://trusted.knot.test",
+}));
 
 const authorized = {
   identity: {
@@ -67,6 +70,9 @@ describe("session workspace route", () => {
       "application/problem+json",
     );
     expect(body.code).toBe("authentication-required");
+    expect(body.type).toBe(
+      "https://trusted.knot.test/problems/authentication-required",
+    );
     expect(getAuthorizedWorkspace).toHaveBeenCalledOnce();
     expect(getAuthorizedWorkspace).toHaveBeenCalledWith(expect.any(Headers));
   });

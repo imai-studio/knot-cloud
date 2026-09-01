@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { anytypeOperationRequestSchema } from "./anytype-operation.js";
 import { canonicalJson, sha256Hex } from "./canonical-json.js";
 import { commandEnvelopeSchema } from "./command.js";
+import { consumerApiKeyCreateSchema } from "./consumer-api-key.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
 import { pairingGrantSchema, pairingSessionPollSchema } from "./pairing.js";
 import { protocolVersion } from "./protocol.js";
@@ -201,6 +202,23 @@ describe("typed remote operations", () => {
     ).toThrow();
   });
 
+  it("requires operation expiry to be later than creation", () => {
+    expect(() =>
+      anytypeOperationRequestSchema.parse({
+        protocolVersion,
+        connectorId: "connector-1",
+        idempotencyKey: "operation-key-0003",
+        createdAt: 1_788_192_000,
+        expiresAt: 1_788_192_000,
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      }),
+    ).toThrow(/expiry/u);
+  });
+
   it("requires lease fencing on commands", () => {
     expect(() =>
       commandEnvelopeSchema.parse({
@@ -209,6 +227,11 @@ describe("typed remote operations", () => {
         connectorId: "connector-1",
         requiredScope: "anytype.objects.read",
         createdBy: "consumer-api-key",
+        actor: {
+          principalDigest: "a".repeat(64),
+          digestVersion: 1,
+          provenance: "consumer-api-key",
+        },
         createdAt: 1_788_192_000,
         notBefore: 1_788_192_000,
         expiresAt: 1_788_192_600,
@@ -224,6 +247,81 @@ describe("typed remote operations", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("binds authenticated actor provenance to the command creator", () => {
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        protocolVersion,
+        commandId: "command-1",
+        connectorId: "connector-1",
+        requiredScope: "anytype.objects.read",
+        createdBy: "consumer-api-key",
+        actor: {
+          principalDigest: "a".repeat(64),
+          digestVersion: 1,
+          provenance: "authenticated-cloud-session",
+        },
+        createdAt: 1_788_192_000,
+        notBefore: 1_788_192_000,
+        expiresAt: 1_788_192_600,
+        attempt: 1,
+        leaseToken: "active-lease-token-0000000000000001",
+        leaseExpiresAt: 1_788_192_060,
+        payload: {
+          domain: "anytype",
+          operation: {
+            type: "object.read",
+            spaceId: "space-1",
+            objectId: "object-1",
+          },
+        },
+      }),
+    ).toThrow(/provenance must be consumer-api-key/u);
+  });
+
+  it("reserves the legacy actor sentinel for explicit unverified provenance", () => {
+    const command = {
+      protocolVersion,
+      commandId: "00000000-0000-4000-8000-000000000051",
+      connectorId: "connector-1",
+      requiredScope: "anytype.objects.read",
+      createdBy: "first-party-service",
+      actor: {
+        principalDigest: "0".repeat(64),
+        digestVersion: 1,
+        provenance: "unverified-legacy",
+      },
+      createdAt: 1_788_192_000,
+      notBefore: 1_788_192_000,
+      expiresAt: 1_788_192_600,
+      attempt: 1,
+      leaseToken: "active-lease-token-0000000000000001",
+      leaseExpiresAt: 1_788_192_060,
+      payload: {
+        domain: "anytype",
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      },
+    } as const;
+    expect(commandEnvelopeSchema.parse(command).actor.provenance).toBe(
+      "unverified-legacy",
+    );
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        ...command,
+        actor: { ...command.actor, provenance: "first-party-service" },
+      }),
+    ).toThrow(/legacy sentinel requires unverified-legacy/u);
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        ...command,
+        actor: { ...command.actor, principalDigest: "a".repeat(64) },
+      }),
+    ).toThrow(/requires the legacy sentinel/u);
   });
 });
 
@@ -246,5 +344,29 @@ describe("pairing identifiers", () => {
         slugGrants: [],
       }),
     ).toThrow(/unique/u);
+  });
+});
+
+describe("consumer API-key controls", () => {
+  it("accepts only explicit Anytype scopes and connector UUIDs", () => {
+    const value = consumerApiKeyCreateSchema.parse({
+      name: "Reporting",
+      scopes: ["anytype.objects.read", "anytype.objects.read"],
+      connectorIds: [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001",
+      ],
+    });
+    expect(value.scopes).toEqual(["anytype.objects.read"]);
+    expect(value.connectorIds).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+    ]);
+    expect(() =>
+      consumerApiKeyCreateSchema.parse({
+        name: "Publisher",
+        scopes: ["publications.write"],
+        connectorIds: ["00000000-0000-4000-8000-000000000001"],
+      }),
+    ).toThrow();
   });
 });

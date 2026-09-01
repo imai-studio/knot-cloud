@@ -2,6 +2,7 @@ import { problemDetailsSchema } from "@imai/knot-cloud-contract";
 import { z } from "zod";
 
 import { getAuthorizedSession, isTrustedHumanMutationOrigin } from "@/lib/auth";
+import { getAppBaseUrl } from "@/lib/env";
 import {
   getAuthorizedWorkspace,
   selectAuthorizedWorkspace,
@@ -63,13 +64,14 @@ function problem(
   status: 400 | 401 | 403,
   code: "invalid-request" | "authentication-required" | "forbidden",
 ) {
+  void request;
   const titles = {
     "invalid-request": "The workspace request is invalid.",
     "authentication-required": "Sign in to access this workspace.",
     forbidden: "This session cannot access that workspace.",
   } as const;
   const body = problemDetailsSchema.parse({
-    type: new URL(`/problems/${code}`, request.url).toString(),
+    type: new URL(`/problems/${code}`, getAppBaseUrl()).toString(),
     title: titles[code],
     status,
     code,

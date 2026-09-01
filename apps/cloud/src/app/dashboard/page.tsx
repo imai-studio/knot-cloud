@@ -14,6 +14,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { AccountMenu } from "@/components/account-menu";
+import { ApiKeyManager } from "@/components/api-key-manager";
 import { Brand } from "@/components/brand";
 import { ConnectorsPanel } from "@/components/connectors-panel";
 import {
@@ -25,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { getAuthorizedSession } from "@/lib/auth";
 import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
+import { NeonConsumerDataRepository } from "@/lib/adapters/neon-consumer-data";
 import { cn } from "@/lib/utils";
 import { NeonPairingRepository } from "@/lib/adapters/neon-pairing";
 import { canManageConnectors } from "@/lib/pairing";
@@ -142,6 +144,12 @@ export default async function DashboardPage({
       });
     }
   }
+  const apiKeys =
+    view === "api-keys" && manageConnectors
+      ? await new NeonConsumerDataRepository().listApiKeys(
+          authorized.workspace.tenantId,
+        )
+      : [];
 
   return (
     <div className="min-h-screen bg-muted/35 lg:grid lg:grid-cols-[240px_1fr]">
@@ -229,7 +237,25 @@ export default async function DashboardPage({
               initialSites={initialSites}
             />
           ) : null}
-          {view !== "overview" && view !== "connectors" && view !== "sites" ? (
+          {view === "api-keys" ? (
+            manageConnectors ? (
+              <ApiKeyManager initialKeys={apiKeys} />
+            ) : (
+              <section className="max-w-2xl rounded-2xl border bg-background p-6">
+                <h1 className="font-heading text-2xl font-semibold">
+                  API keys require owner access
+                </h1>
+                <p className="mt-2 leading-7 text-muted-foreground">
+                  Workspace members cannot view key metadata or manage API
+                  credentials. Ask a workspace owner to make this change.
+                </p>
+              </section>
+            )
+          ) : null}
+          {view !== "overview" &&
+          view !== "connectors" &&
+          view !== "sites" &&
+          view !== "api-keys" ? (
             <SectionEmptyState view={view} />
           ) : null}
         </main>

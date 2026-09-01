@@ -120,7 +120,7 @@ export const anytypeOperationRequestSchema = z
   })
   .refine(
     (value) =>
-      value.expiresAt >= value.createdAt &&
+      value.expiresAt > value.createdAt &&
       value.expiresAt - value.createdAt <= 24 * 60 * 60,
     "Operation expiry must be within 24 hours of creation",
   );

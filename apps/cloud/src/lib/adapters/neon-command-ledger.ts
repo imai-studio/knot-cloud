@@ -13,6 +13,9 @@ interface ClaimedCommandRow {
   required_scope: string;
   payload: unknown;
   created_by_kind: string;
+  actor_digest: string;
+  actor_digest_version: number;
+  actor_provenance: string;
   created_at: Date;
   not_before: Date;
   expires_at: Date;
@@ -94,15 +97,23 @@ export class NeonCommandLedger implements CommandLedger {
     const now = new Date();
     const [rows = []] = await withTenant(input.tenantId, (transaction) => [
       transaction`
-        SELECT *
-        FROM claim_command(
-          ${input.tenantId}::uuid,
-          ${input.connectorId}::uuid,
-          ${input.allowedScopes}::scope_name[],
-          ${now},
-          ${leaseTokenDigest},
-          ${input.leaseSeconds}
+        WITH claimed AS MATERIALIZED (
+          SELECT *
+          FROM claim_command(
+            ${input.tenantId}::uuid,
+            ${input.connectorId}::uuid,
+            ${input.allowedScopes}::scope_name[],
+            ${now},
+            ${leaseTokenDigest},
+            ${input.leaseSeconds}
+          )
         )
+        SELECT claimed.*, command.actor_digest, command.actor_digest_version,
+          command.actor_provenance
+        FROM claimed
+        JOIN commands AS command
+          ON command.tenant_id = ${input.tenantId}::uuid
+          AND command.id = claimed.command_id
       `,
     ]);
     const row = rows[0] as ClaimedCommandRow | undefined;
@@ -112,6 +123,9 @@ export class NeonCommandLedger implements CommandLedger {
       requiredScope: row.required_scope,
       payload: row.payload,
       createdByKind: row.created_by_kind,
+      actorDigest: row.actor_digest,
+      actorDigestVersion: row.actor_digest_version,
+      actorProvenance: row.actor_provenance,
       createdAt: row.created_at,
       notBefore: row.not_before,
       expiresAt: row.expires_at,
