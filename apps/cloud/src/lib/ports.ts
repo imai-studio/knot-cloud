@@ -70,7 +70,14 @@ export class RevocableObjectReader {
         cacheControl: privateObjectCacheControl,
       };
     }
-    if ((await this.visibility.getVisibility(locator)) !== "active") {
+    let visibility: ObjectVisibility;
+    try {
+      visibility = await this.visibility.getVisibility(locator);
+    } catch (error) {
+      await object.stream.cancel("visibility check failed").catch(() => {});
+      throw error;
+    }
+    if (visibility !== "active") {
       await object.stream.cancel("object was tombstoned during the read");
       return {
         status: "not-found",

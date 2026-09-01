@@ -100,4 +100,29 @@ describe("RevocableObjectReader", () => {
       "object was tombstoned during the read",
     );
   });
+
+  it("cancels a fetched body when the second visibility check fails", async () => {
+    const cancel = vi.fn();
+    const stored: StoredObject = {
+      descriptor: {
+        ...locator,
+        key: `tenants/${locator.tenantId}/assets/11/${locator.sha256}`,
+        contentType: "image/png",
+        size: 0,
+      },
+      cacheControl: privateObjectCacheControl,
+      stream: new ReadableStream<Uint8Array>({ cancel }),
+    };
+    const objects = objectStore(async () => stored);
+    const visibility = vi
+      .fn<() => Promise<ObjectVisibility>>()
+      .mockResolvedValueOnce("active")
+      .mockRejectedValueOnce(new Error("database unavailable"));
+    const reader = new RevocableObjectReader(objects, {
+      getVisibility: visibility,
+    });
+
+    await expect(reader.get(locator)).rejects.toThrow("database unavailable");
+    expect(cancel).toHaveBeenCalledWith("visibility check failed");
+  });
 });

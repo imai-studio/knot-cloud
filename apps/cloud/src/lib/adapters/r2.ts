@@ -25,6 +25,8 @@ const hardMaxObjectBytes = 134_217_728;
 const tenantIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const mediaTypePattern =
+  /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*(?:\s*;\s*[a-z0-9!#$&^_.+-]+=[^;\r\n\0]+)*$/iu;
 
 export class ObjectDigestMismatchError extends Error {
   constructor() {
@@ -58,7 +60,8 @@ function validateContentType(contentType: string): void {
   if (
     contentType.length === 0 ||
     contentType.length > 255 ||
-    /[\r\n\0]/u.test(contentType)
+    /[\r\n\0]/u.test(contentType) ||
+    !mediaTypePattern.test(contentType)
   ) {
     throw new TypeError("contentType must be a safe non-empty media type");
   }
@@ -115,7 +118,7 @@ async function materializeBody(input: {
   }
 
   const reader = input.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const body = new Uint8Array(contentLength);
   let size = 0;
   try {
     while (true) {
@@ -128,7 +131,7 @@ async function materializeBody(input: {
           "stream contains more bytes than its declared length",
         );
       }
-      chunks.push(result.value);
+      body.set(result.value, size - result.value.byteLength);
     }
   } finally {
     reader.releaseLock();
@@ -140,12 +143,6 @@ async function materializeBody(input: {
     );
   }
 
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
   return body;
 }
 
@@ -156,7 +153,7 @@ function digest(bytes: Uint8Array, algorithm: "md5" | "sha256"): Buffer {
 function isMissingObject(error: unknown): boolean {
   return (
     error instanceof S3ServiceException &&
-    (error.name === "NoSuchKey" || error.$metadata.httpStatusCode === 404)
+    (error.name === "NoSuchKey" || error.name === "NotFound")
   );
 }
 
@@ -300,7 +297,11 @@ export class R2PrivateObjectStore implements ObjectStore {
           Key: key,
         }),
       );
-      if (!result.Body) return undefined;
+      if (!result.Body) {
+        throw new Error(
+          "R2 returned a successful object response without a body",
+        );
+      }
 
       const source = result.Body.transformToWebStream();
       let size: number;
@@ -322,7 +323,9 @@ export class R2PrivateObjectStore implements ObjectStore {
           );
         }
       } catch (error) {
-        await source.cancel("stored object metadata is invalid");
+        await source
+          .cancel("stored object metadata is invalid")
+          .catch(() => {});
         throw error;
       }
 

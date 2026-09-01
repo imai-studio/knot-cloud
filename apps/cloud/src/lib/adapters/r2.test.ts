@@ -6,6 +6,7 @@ import {
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
+  S3ServiceException,
 } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
 
@@ -84,6 +85,21 @@ describe("R2PrivateObjectStore", () => {
         contentType: "application/octet-stream",
       }),
     ).rejects.toBeInstanceOf(ObjectDigestMismatchError);
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed media types before writing", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const client = mockClient(async () => ({}));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: bytes,
+        contentType: "not-a-media-type",
+      }),
+    ).rejects.toThrow(/media type/u);
     expect(client.send).not.toHaveBeenCalled();
   });
 
@@ -231,6 +247,34 @@ describe("R2PrivateObjectStore", () => {
     ).rejects.toThrow(/contentLength is required/u);
   });
 
+  it("cancels a stream that exceeds its declared byte length", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        controller.enqueue(bytes);
+      },
+    });
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({})),
+      bucket: "knot-test",
+      maxObjectBytes: 8,
+    });
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: stream,
+        contentLength: 3,
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toBeInstanceOf(ObjectSizeError);
+    expect(cancel).toHaveBeenCalledWith(
+      "object exceeded its declared byte length",
+    );
+  });
+
   it("reads through the authenticated endpoint and verifies the bytes", async () => {
     const bytes = new Uint8Array([4, 5]);
     const object = locator(bytes);
@@ -341,6 +385,49 @@ describe("R2PrivateObjectStore", () => {
     const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
 
     await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
+  });
+
+  it("maps only modeled missing-key responses to undefined", async () => {
+    const object = locator(new Uint8Array([1]));
+    const missing = new S3ServiceException({
+      $fault: "client",
+      $metadata: { httpStatusCode: 404 },
+      name: "NoSuchKey",
+    });
+    const missingStore = new R2PrivateObjectStore({
+      client: mockClient(async () => Promise.reject(missing)),
+      bucket: "knot-test",
+    });
+    await expect(missingStore.get(object)).resolves.toBeUndefined();
+
+    const missingBucket = new S3ServiceException({
+      $fault: "client",
+      $metadata: { httpStatusCode: 404 },
+      name: "NoSuchBucket",
+    });
+    const brokenStore = new R2PrivateObjectStore({
+      client: mockClient(async () => Promise.reject(missingBucket)),
+      bucket: "knot-test",
+    });
+    await expect(brokenStore.get(object)).rejects.toBe(missingBucket);
+  });
+
+  it("rejects a successful object response without a body", async () => {
+    const object = locator(new Uint8Array([1]));
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        ContentLength: 1,
+        Metadata: {
+          "byte-size": "1",
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      })),
+      bucket: "knot-test",
+    });
+
+    await expect(store.get(object)).rejects.toThrow(/without a body/u);
   });
 
   it("deletes only tombstoned tenant objects, with deduplication and batching", async () => {
