@@ -14,7 +14,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "pnpm -r --if-present test",
-    "typecheck": "pnpm --filter @imai/knot-cloud-contract build && pnpm -r --if-present typecheck"
+    "typecheck": "pnpm --filter @imai/knot-cloud-contract build && pnpm --filter @imai/knot-publication-renderer build && pnpm -r --if-present typecheck"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.8",
