@@ -154,6 +154,18 @@ export interface PublicationRepository {
     idempotencyKey: string;
     requestSha256: string;
   }): Promise<PublicationControlResult>;
+  controlAsHuman?(input: {
+    tenantId: string;
+    userId: string;
+    operation:
+      | { type: "publication.disable"; publicationId: string }
+      | {
+          type: "publication.rollback";
+          publicationId: string;
+          versionId: string;
+        }
+      | { type: "publication.unpublish"; publicationId: string };
+  }): Promise<PublicationControlResult>;
 }
 
 export class PublicationService {
@@ -299,6 +311,7 @@ export class PublicationService {
 
   async control(input: {
     tenantId: string;
+    userId?: string;
     operation:
       | { type: "publication.disable"; publicationId: string }
       | {
@@ -308,6 +321,13 @@ export class PublicationService {
         }
       | { type: "publication.unpublish"; publicationId: string };
   }): Promise<PublicationControlResult> {
+    if (input.userId && this.repository.controlAsHuman) {
+      return this.repository.controlAsHuman({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        operation: input.operation,
+      });
+    }
     switch (input.operation.type) {
       case "publication.disable": {
         const at = await this.repository.disable({

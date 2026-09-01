@@ -33,6 +33,7 @@ This file is the release contract. Plans belong in
 - Consumer API-key management and the Anytype data API.
 - A local connector configured to use Knot Cloud.
 - Upstash replay storage, queue workers, scheduled reconciliation, or hosted connectors.
+- Custom reader domains, authenticated reader sessions, media derivatives, billing, or quota plans.
 
 The repository contains a reviewed candidate implementation of the signed command claim, lease,
 and result routes. That code is not part of the release contract until its pull request is merged,

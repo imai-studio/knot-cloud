@@ -125,3 +125,24 @@ Prerequisite: security and recovery evidence from P2 through P6.
 
 These items stay out of the release contract until their security model, deletion behavior, and
 operational owner are documented.
+
+### P7 platform extension candidate
+
+The stacked platform extension branch implements a bounded first slice without changing the release
+contract:
+
+- [x] DNS TXT challenge state and owner/admin controls for custom reader domains, without DNS
+      mutation.
+- [x] Digest-only reader grants, revocable reader sessions, and public/authenticated site policy.
+- [x] Database-enforced limits and dashboard usage for sites, domains, grants, API keys, connectors,
+      storage, and derivative job metadata.
+- [x] Tenant RLS and audit records for platform mutations and human publication controls.
+- [ ] Media transformation execution. Only bounded job metadata and a disabled provider boundary
+      exist.
+- [ ] Hosted connector execution. The provider remains disabled pending licensing, runtime
+      isolation, and KMS design.
+- [ ] Billing. The provider remains disabled until a provider, entitlement model, and webhook
+      recovery plan exist.
+
+See [`platform-extensions.md`](platform-extensions.md) for the candidate's trust boundaries and
+release checks.

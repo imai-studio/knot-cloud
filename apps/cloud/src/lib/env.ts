@@ -22,6 +22,7 @@ const coreEnvironmentSchema = z.object({
   IDENTITY_DIGEST_VERSION: z.coerce.number().int().positive().default(1),
   KNOT_SIGNING_AUTHORITIES: optionalNonEmptyString(),
   WEBHOOK_DESTINATIONS_JSON: optionalNonEmptyString(),
+  DOMAIN_CHALLENGE_SECRET: optionalNonEmptyString(32),
 });
 
 const appBaseUrlSchema = z.url();
@@ -219,6 +220,14 @@ export function getWebhookDestinations(): ReadonlyMap<
   WebhookDestination
 > {
   return webhookDestinationsFromEnvironment(getCloudEnvironment());
+}
+
+export function getDomainChallengeSecret(): string {
+  const secret = getCloudEnvironment().DOMAIN_CHALLENGE_SECRET;
+  if (!secret) {
+    throw new Error("Custom domain verification is not configured");
+  }
+  return secret;
 }
 
 export function getR2Environment() {

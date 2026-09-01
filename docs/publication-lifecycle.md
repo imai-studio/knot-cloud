@@ -32,7 +32,10 @@ Console and API paths return `404` on that origin, and reader paths return `404`
 origin. See [`public-reader.md`](public-reader.md) for the URL shape and deployment checks.
 
 Disable clears reader eligibility without deleting stored versions. Rollback selects an earlier
-ready version. Unpublish does three things in one database transaction:
+ready version. Committing a new publication version deliberately clears `disabled_at`, so publishing
+new content re-enables a disabled publication. This is an explicit connector-authorized write, not
+an ambient recovery action. Unpublish is terminal for that publication identity and does three
+things in one database transaction:
 
 1. clears the active pointer and records the tombstone;
 2. makes every service-controlled lookup return not found;

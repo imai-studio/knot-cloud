@@ -5,6 +5,7 @@ import {
   FileText,
   Globe2,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
@@ -19,6 +20,7 @@ import {
 } from "@/components/audit-log-panel";
 import { Brand } from "@/components/brand";
 import { ConnectorsPanel } from "@/components/connectors-panel";
+import { PlatformPanel } from "@/components/platform-panel";
 import {
   SitesPanel,
   type Publication,
@@ -55,6 +57,12 @@ const navItems = [
     icon: KeyRound,
     id: "api-keys",
     label: "API keys",
+  },
+  {
+    href: "/dashboard?view=access",
+    icon: ShieldCheck,
+    id: "access",
+    label: "Access & domains",
   },
   {
     href: "/dashboard?view=audit-log",
@@ -113,7 +121,7 @@ export default async function DashboardPage({
       : null;
   let initialSites: Site[] = [];
   let initialPublications: Publication[] = [];
-  if (view === "sites") {
+  if (view === "sites" || view === "access") {
     const repository = new NeonPublicationRepository();
     initialSites = await repository.listSites(authorized.workspace.tenantId);
     const firstSite = initialSites[0];
@@ -261,6 +269,13 @@ export default async function DashboardPage({
               <RestrictedSection title="API keys" />
             )
           ) : null}
+          {view === "access" ? (
+            manageConnectors ? (
+              <PlatformPanel sites={initialSites} />
+            ) : (
+              <RestrictedSection title="Access and domains" />
+            )
+          ) : null}
           {view === "audit-log" ? (
             auditPage && manageConnectors ? (
               <AuditLogPanel initialPage={auditPage} />
@@ -316,6 +331,12 @@ function Overview() {
             label: "Issue a scoped API key",
             detail:
               "Bind the key to known connectors, set an expiry, and keep the secret once.",
+          },
+          {
+            href: "/dashboard?view=access",
+            label: "Set reader access and domains",
+            detail:
+              "Issue revocable reader grants, verify DNS ownership, and inspect enforced limits.",
           },
           {
             href: "/dashboard?view=audit-log",

@@ -23,10 +23,11 @@ Set these server-side variables:
 | `R2_SECRET_ACCESS_KEY` | Secret for the same token.                             |
 | `R2_MAX_OBJECT_BYTES`  | Upload and download cap. Defaults to 33,554,432 bytes. |
 
-The cap cannot exceed 134,217,728 bytes in this implementation. Knot buffers one verified object per
-request, and total memory use grows with concurrent requests. Choose the cap against the runtime's
-memory limit. Lowering it below the size of stored objects makes those objects unreadable until the
-cap is restored.
+The publication API accepts assets up to 100 MiB (104,857,600 bytes). The lower configured
+`R2_MAX_OBJECT_BYTES` value still wins. Knot buffers one verified object per request, so total
+memory use grows with concurrent requests. Choose the configured cap against the runtime's memory
+limit. Lowering it below the size of stored objects makes those objects unreadable until the cap is
+restored.
 
 Vercel Functions are not the asset transport. Their request body is limited to roughly 4.5 MiB,
 well below the R2 object limit. Publication clients must upload large bytes with a short-lived,
