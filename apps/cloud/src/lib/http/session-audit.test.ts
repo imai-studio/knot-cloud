@@ -63,26 +63,40 @@ describe("session audit HTTP service", () => {
     });
   });
 
-  it("denies members and rejects invalid filters before querying", async () => {
-    vi.mocked(getAuthorizedWorkspace).mockResolvedValueOnce({
-      identity: {
-        session: { id: "session-1" },
-        user: { email: "member@example.test", id: "user-1", name: "Member" },
-      },
-      workspace: {
-        name: "Workspace",
-        role: "member",
-        suspended: false,
-        tenantId,
-        userId: "00000000-0000-4000-8000-000000000003",
-      },
-    });
-    const repository: AuditRepository = { list: vi.fn() };
-    const denied = await createSessionAuditHandler(repository)(
-      new Request("https://knot.test/api/v1/session/audit-events"),
-    );
-    expect(denied.status).toBe(403);
+  it.each([
+    { role: "member", suspended: false },
+    { role: "billing-admin", suspended: false },
+    { role: "owner", suspended: true },
+  ])(
+    "denies non-admin, future, and suspended roles: $role/$suspended",
+    async (workspace) => {
+      vi.mocked(getAuthorizedWorkspace).mockResolvedValueOnce({
+        identity: {
+          session: { id: "session-1" },
+          user: {
+            email: "denied@example.test",
+            id: "user-1",
+            name: "Denied",
+          },
+        },
+        workspace: {
+          name: "Workspace",
+          tenantId,
+          userId: "00000000-0000-4000-8000-000000000003",
+          ...workspace,
+        },
+      } as Awaited<ReturnType<typeof getAuthorizedWorkspace>>);
+      const repository: AuditRepository = { list: vi.fn() };
+      const denied = await createSessionAuditHandler(repository)(
+        new Request("https://knot.test/api/v1/session/audit-events"),
+      );
+      expect(denied.status).toBe(403);
+      expect(repository.list).not.toHaveBeenCalled();
+    },
+  );
 
+  it("rejects invalid filters before querying", async () => {
+    const repository: AuditRepository = { list: vi.fn() };
     const invalid = await createSessionAuditHandler(repository)(
       new Request("https://knot.test/api/v1/session/audit-events?limit=500"),
     );

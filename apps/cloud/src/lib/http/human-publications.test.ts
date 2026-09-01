@@ -67,6 +67,40 @@ describe("human publication HTTP service", () => {
     expect(repository.createSite).not.toHaveBeenCalled();
   });
 
+  it.each(["member", "billing-admin"])(
+    "denies %s site and publication mutations",
+    async (role) => {
+      vi.mocked(getAuthorizedWorkspace).mockResolvedValue({
+        ...authorized,
+        workspace: { ...authorized.workspace, role },
+      } as Awaited<ReturnType<typeof getAuthorizedWorkspace>>);
+      const repository = publicationRepository();
+      const control = vi.fn();
+      const handlers = createHumanPublicationHandlers({
+        repository,
+        service: { control },
+      });
+
+      const create = await handlers.createSite(
+        jsonRequest("/api/v1/session/sites", {
+          name: "Notes",
+          slug: "notes",
+        }),
+      );
+      const mutate = await handlers.control(
+        jsonRequest(`/api/v1/session/publications/${publicationId}/control`, {
+          type: "publication.disable",
+        }),
+        publicationId,
+      );
+
+      expect(create.status).toBe(403);
+      expect(mutate.status).toBe(403);
+      expect(repository.createSite).not.toHaveBeenCalled();
+      expect(control).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns conflict only for a known site uniqueness violation", async () => {
     const repository = publicationRepository({
       createSite: vi

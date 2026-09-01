@@ -5,8 +5,14 @@ import type {
   ScopeName,
 } from "@imai/knot-cloud-contract";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import {
+  availableScopesForConnectors,
+  pruneConnectorSelection,
+  pruneScopeSelection,
+  type ApiKeyConnectorOption,
+} from "@/components/api-key-selection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,18 +28,11 @@ const commonScopes: ScopeName[] = [
   "anytype.chats.send",
 ];
 
-interface ConnectorOption {
-  id: string;
-  name: string;
-  revokedAt: string | null;
-  scopes: string[];
-}
-
 export function ApiKeyManager({
   connectors,
   initialKeys,
 }: {
-  connectors: ConnectorOption[];
+  connectors: ApiKeyConnectorOption[];
   initialKeys: ConsumerApiKeyMetadata[];
 }) {
   const [keys, setKeys] = useState(initialKeys);
@@ -42,6 +41,24 @@ export function ApiKeyManager({
   const [busy, setBusy] = useState(false);
   const [selectedConnectorIds, setSelectedConnectorIds] = useState<string[]>(
     [],
+  );
+  const [selectedScopes, setSelectedScopes] = useState<ScopeName[]>([]);
+  const usableConnectorIds = useMemo(
+    () => pruneConnectorSelection(connectors, selectedConnectorIds),
+    [connectors, selectedConnectorIds],
+  );
+  const availableScopes = useMemo(
+    () =>
+      availableScopesForConnectors(
+        connectors,
+        usableConnectorIds,
+        commonScopes,
+      ),
+    [connectors, usableConnectorIds],
+  );
+  const usableScopes = useMemo(
+    () => pruneScopeSelection(selectedScopes, availableScopes),
+    [availableScopes, selectedScopes],
   );
 
   async function refresh() {
@@ -56,8 +73,8 @@ export function ApiKeyManager({
     setError(undefined);
     setSecret(undefined);
     try {
-      const scopes = formData.getAll("scopes");
-      const connectorIds = formData.getAll("connectorIds").map(String);
+      const scopes = usableScopes;
+      const connectorIds = usableConnectorIds;
       if (connectorIds.length === 0) {
         throw new Error("Select at least one active connector.");
       }
@@ -249,17 +266,28 @@ export function ApiKeyManager({
                   >
                     <input
                       className="mt-0.5 size-4"
-                      checked={selectedConnectorIds.includes(connector.id)}
+                      checked={usableConnectorIds.includes(connector.id)}
                       type="checkbox"
                       name="connectorIds"
                       value={connector.id}
-                      onChange={(event) =>
-                        setSelectedConnectorIds((current) =>
-                          event.target.checked
-                            ? [...current, connector.id]
-                            : current.filter((id) => id !== connector.id),
-                        )
-                      }
+                      onChange={(event) => {
+                        const nextConnectorIds = event.target.checked
+                          ? [...new Set([...usableConnectorIds, connector.id])]
+                          : usableConnectorIds.filter(
+                              (id) => id !== connector.id,
+                            );
+                        setSelectedConnectorIds(nextConnectorIds);
+                        setSelectedScopes((current) =>
+                          pruneScopeSelection(
+                            current,
+                            availableScopesForConnectors(
+                              connectors,
+                              nextConnectorIds,
+                              commonScopes,
+                            ),
+                          ),
+                        );
+                      }}
                     />
                     <span className="min-w-0">
                       <span className="block font-medium">
@@ -280,14 +308,15 @@ export function ApiKeyManager({
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {commonScopes.map((scope) => (
               <ScopeChoice
+                checked={usableScopes.includes(scope)}
                 key={scope}
                 scope={scope}
-                available={
-                  selectedConnectorIds.length > 0 &&
-                  selectedConnectorIds.every((connectorId) =>
-                    connectors
-                      .find((connector) => connector.id === connectorId)
-                      ?.scopes.includes(scope),
+                available={availableScopes.includes(scope)}
+                onCheckedChange={(checked) =>
+                  setSelectedScopes(() =>
+                    checked
+                      ? [...new Set([...usableScopes, scope])]
+                      : usableScopes.filter((selected) => selected !== scope),
                   )
                 }
               />
@@ -378,9 +407,13 @@ function isRotatable(key: ConsumerApiKeyMetadata) {
 
 function ScopeChoice({
   available,
+  checked,
+  onCheckedChange,
   scope,
 }: {
   available: boolean;
+  checked: boolean;
+  onCheckedChange(checked: boolean): void;
   scope: ScopeName;
 }) {
   return (
@@ -390,10 +423,12 @@ function ScopeChoice({
       }`}
     >
       <input
+        checked={checked}
         type="checkbox"
         name="scopes"
         value={scope}
         disabled={!available}
+        onChange={(event) => onCheckedChange(event.target.checked)}
       />
       <span>{scope}</span>
     </label>

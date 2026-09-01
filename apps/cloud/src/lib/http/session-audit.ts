@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { NeonAuditRepository } from "@/lib/adapters/neon-audit";
 import { auditPrincipalKinds, type AuditRepository } from "@/lib/audit";
+import { canManageConnectors } from "@/lib/pairing";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 import { jsonResponse, problemResponse } from "./problem";
@@ -27,7 +28,7 @@ export function createSessionAuditHandler(
         title: "Sign in to review workspace activity",
       });
     }
-    if (authorized.workspace.role === "member") {
+    if (!canManageConnectors(authorized)) {
       return problemResponse({
         request,
         status: 403,

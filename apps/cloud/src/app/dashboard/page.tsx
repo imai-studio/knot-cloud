@@ -242,6 +242,7 @@ export default async function DashboardPage({
           ) : null}
           {view === "sites" ? (
             <SitesPanel
+              canManage={manageConnectors}
               initialPublications={initialPublications}
               initialSites={initialSites}
             />

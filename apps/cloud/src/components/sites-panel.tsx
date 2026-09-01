@@ -34,9 +34,11 @@ type PublicationVersion = {
 };
 
 export function SitesPanel({
+  canManage,
   initialPublications,
   initialSites,
 }: {
+  canManage: boolean;
   initialPublications: Publication[];
   initialSites: Site[];
 }) {
@@ -52,33 +54,49 @@ export function SitesPanel({
   const [versions, setVersions] = useState<
     Record<string, PublicationVersion[]>
   >({});
+  const [creatingSite, setCreatingSite] = useState(false);
+  const [controllingPublicationId, setControllingPublicationId] =
+    useState<string>();
+  const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
 
   async function loadSites() {
     setLoadingSites(true);
-    const response = await fetch("/api/v1/session/sites", {
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      setMessage("Sites could not be loaded.");
+    setError(undefined);
+    try {
+      const response = await fetch("/api/v1/session/sites", {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Sites could not be loaded.");
+      const nextSites = (await response.json()) as Site[];
+      setSites(nextSites);
+      setSelectedSiteId((current) => current ?? nextSites[0]?.id);
+      return true;
+    } catch (currentError) {
+      setError(messageFrom(currentError, "Sites could not be loaded."));
+      return false;
+    } finally {
       setLoadingSites(false);
-      return;
     }
-    const nextSites = (await response.json()) as Site[];
-    setSites(nextSites);
-    setSelectedSiteId((current) => current ?? nextSites[0]?.id);
-    setLoadingSites(false);
   }
 
   async function loadPublications(siteId: string) {
     setLoadingPublications(true);
-    const response = await fetch(
-      `/api/v1/session/sites/${siteId}/publications`,
-      { cache: "no-store" },
-    );
-    if (response.ok) setPublications((await response.json()) as Publication[]);
-    else setMessage("Publications could not be loaded.");
-    setLoadingPublications(false);
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/v1/session/sites/${siteId}/publications`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) throw new Error("Publications could not be loaded.");
+      setPublications((await response.json()) as Publication[]);
+      return true;
+    } catch (currentError) {
+      setError(messageFrom(currentError, "Publications could not be loaded."));
+      return false;
+    } finally {
+      setLoadingPublications(false);
+    }
   }
 
   async function selectSite(siteId: string) {
@@ -95,41 +113,61 @@ export function SitesPanel({
     setExpandedPublicationId(publicationId);
     if (versions[publicationId]) return;
     setLoadingVersionId(publicationId);
-    const response = await fetch(
-      `/api/v1/session/publications/${publicationId}/versions`,
-      { cache: "no-store" },
-    );
-    if (response.ok) {
+    setError(undefined);
+    try {
+      const response = await fetch(
+        `/api/v1/session/publications/${publicationId}/versions`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        throw new Error("Version history could not be loaded. Try again.");
+      }
       const loaded = (await response.json()) as PublicationVersion[];
       setVersions((current) => ({
         ...current,
         [publicationId]: loaded,
       }));
-    } else {
-      setMessage("Version history could not be loaded. Try again.");
+    } catch (currentError) {
+      setError(
+        messageFrom(
+          currentError,
+          "Version history could not be loaded. Try again.",
+        ),
+      );
+    } finally {
+      setLoadingVersionId(undefined);
     }
-    setLoadingVersionId(undefined);
   }
 
   async function createSite(formData: FormData) {
+    if (!canManage) return;
+    setCreatingSite(true);
+    setError(undefined);
     setMessage(undefined);
-    const response = await fetch("/api/v1/session/sites", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: formData.get("name"),
-        slug: formData.get("slug"),
-      }),
-    });
-    if (!response.ok) {
-      setMessage("Choose a valid, unused name and slug.");
-      return;
+    try {
+      const response = await fetch("/api/v1/session/sites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: formData.get("name"),
+          slug: formData.get("slug"),
+        }),
+      });
+      if (!response.ok) {
+        throw new Error("Choose a valid, unused name and public slug.");
+      }
+      const site = (await response.json()) as Site;
+      if (!(await loadSites())) return;
+      setSelectedSiteId(site.id);
+      setPublications([]);
+      setMessage("Site created. Pair a connector to publish its first page.");
+    } catch (currentError) {
+      setError(
+        messageFrom(currentError, "The publishing site could not be created."),
+      );
+    } finally {
+      setCreatingSite(false);
     }
-    const site = (await response.json()) as Site;
-    await loadSites();
-    setSelectedSiteId(site.id);
-    setPublications([]);
-    setMessage("Site created. Pair a connector before publishing.");
   }
 
   async function control(
@@ -139,6 +177,7 @@ export function SitesPanel({
       | { type: "publication.unpublish" }
       | { type: "publication.rollback"; versionId: string },
   ) {
+    if (!canManage) return;
     if (
       operation.type === "publication.unpublish" &&
       !window.confirm(
@@ -147,26 +186,39 @@ export function SitesPanel({
     ) {
       return;
     }
-    const response = await fetch(
-      `/api/v1/session/publications/${publicationId}/control`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(operation),
-      },
-    );
-    if (!response.ok) {
-      setMessage("The publication state could not be changed.");
-      return;
+    setControllingPublicationId(publicationId);
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      const response = await fetch(
+        `/api/v1/session/publications/${publicationId}/control`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(operation),
+        },
+      );
+      if (!response.ok) {
+        throw new Error("The publication state could not be changed.");
+      }
+      if (selectedSiteId && !(await loadPublications(selectedSiteId))) return;
+      setMessage(
+        operation.type === "publication.unpublish"
+          ? "Unpublished. Stored publication data is queued for deletion."
+          : operation.type === "publication.rollback"
+            ? "The public page now uses the selected ready version."
+            : "The public page is disabled.",
+      );
+    } catch (currentError) {
+      setError(
+        messageFrom(
+          currentError,
+          "The publication state could not be changed.",
+        ),
+      );
+    } finally {
+      setControllingPublicationId(undefined);
     }
-    if (selectedSiteId) await loadPublications(selectedSiteId);
-    setMessage(
-      operation.type === "publication.unpublish"
-        ? "Unpublished. Private bytes are queued for deletion."
-        : operation.type === "publication.rollback"
-          ? "Publication now uses the selected ready version."
-          : "Publication disabled.",
-    );
   }
 
   return (
@@ -179,34 +231,54 @@ export function SitesPanel({
         control what remains available.
       </p>
 
-      <form
-        action={createSite}
-        className="mt-8 grid gap-4 border-y py-6 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
-      >
-        <div className="space-y-2">
-          <Label htmlFor="site-name">Site name</Label>
-          <Input
-            id="site-name"
-            name="name"
-            placeholder="Research notes"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="site-slug">Private slug</Label>
-          <Input
-            id="site-slug"
-            name="slug"
-            placeholder="research-notes"
-            pattern="[a-z0-9][a-z0-9-]{0,62}"
-            required
-          />
-        </div>
-        <Button type="submit" className="h-10">
-          <Plus className="size-4" />
-          Create site
-        </Button>
-      </form>
+      {canManage ? (
+        <form
+          action={createSite}
+          className="mt-8 grid gap-4 border-y py-6 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+        >
+          <div className="space-y-2">
+            <Label htmlFor="site-name">Site name</Label>
+            <Input
+              id="site-name"
+              name="name"
+              placeholder="Research notes"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="site-slug">Public site slug</Label>
+            <Input
+              id="site-slug"
+              name="slug"
+              placeholder="research-notes"
+              pattern="[a-z0-9][a-z0-9-]{0,62}"
+              required
+            />
+            <p className="text-xs leading-5 text-muted-foreground">
+              This becomes the site segment in every public reader URL.
+            </p>
+          </div>
+          <Button type="submit" className="h-10" disabled={creatingSite}>
+            {creatingSite ? (
+              <LoaderCircle className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            Create site
+          </Button>
+        </form>
+      ) : (
+        <p className="mt-8 border-y py-5 text-sm text-muted-foreground">
+          You can inspect sites and version history. A workspace owner or admin
+          must create sites or change what is publicly available.
+        </p>
+      )}
+
+      {error ? (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
 
       {message ? (
         <p role="status" className="mt-4 text-sm text-muted-foreground">
@@ -222,7 +294,9 @@ export function SitesPanel({
               <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
             ) : sites.length === 0 ? (
               <p className="text-sm leading-6 text-muted-foreground">
-                No sites yet. Create one to receive connector publications.
+                {canManage
+                  ? "No sites yet. Create one to receive connector publications."
+                  : "No publishing sites have been created in this workspace."}
               </p>
             ) : (
               sites.map((site) => (
@@ -266,7 +340,9 @@ export function SitesPanel({
                           ? "Deletion pending"
                           : publication.disabledAt
                             ? "Disabled"
-                            : "Ready privately"}
+                            : publication.currentVersionId
+                              ? "Published"
+                              : "Draft — not public"}
                       </p>
                     </div>
                     {!publication.unpublishedAt ? (
@@ -290,11 +366,14 @@ export function SitesPanel({
                             }
                           />
                         </Button>
-                        {!publication.disabledAt ? (
+                        {canManage && !publication.disabledAt ? (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
+                            disabled={
+                              controllingPublicationId === publication.id
+                            }
                             onClick={() =>
                               void control(publication.id, {
                                 type: "publication.disable",
@@ -303,11 +382,14 @@ export function SitesPanel({
                           >
                             Disable
                           </Button>
-                        ) : publication.currentVersionId ? (
+                        ) : canManage && publication.currentVersionId ? (
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
+                            disabled={
+                              controllingPublicationId === publication.id
+                            }
                             onClick={() =>
                               void control(publication.id, {
                                 type: "publication.rollback",
@@ -318,18 +400,23 @@ export function SitesPanel({
                             Enable
                           </Button>
                         ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          onClick={() =>
-                            void control(publication.id, {
-                              type: "publication.unpublish",
-                            })
-                          }
-                        >
-                          Unpublish
-                        </Button>
+                        {canManage ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={
+                              controllingPublicationId === publication.id
+                            }
+                            onClick={() =>
+                              void control(publication.id, {
+                                type: "publication.unpublish",
+                              })
+                            }
+                          >
+                            Unpublish
+                          </Button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -371,11 +458,16 @@ export function SitesPanel({
                                 </div>
                                 {!current &&
                                 version.state === "ready" &&
-                                !publication.unpublishedAt ? (
+                                !publication.unpublishedAt &&
+                                canManage ? (
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="outline"
+                                    disabled={
+                                      controllingPublicationId ===
+                                      publication.id
+                                    }
                                     onClick={() =>
                                       void control(publication.id, {
                                         type: "publication.rollback",
@@ -412,4 +504,8 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function messageFrom(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }

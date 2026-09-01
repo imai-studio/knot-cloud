@@ -11,6 +11,7 @@ import {
   PublicationService,
   type PublicationRepository,
 } from "@/lib/publications";
+import { canManageConnectors } from "@/lib/pairing";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 import { HttpProblem, jsonResponse, problemResponse } from "./problem";
@@ -152,7 +153,7 @@ async function authorizeMutation(request: Request) {
   }
   const authorized = await getAuthorizedWorkspace(request.headers);
   if (!authorized) return authenticationProblem(request);
-  if (!["owner", "admin"].includes(authorized.workspace.role)) {
+  if (!canManageConnectors(authorized)) {
     return problemResponse({
       request,
       status: 403,
