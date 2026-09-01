@@ -229,8 +229,9 @@ export function PlatformPanel({ sites }: { sites: Site[] }) {
       return;
     }
     const grant = (await response.json()) as ReaderGrant & { token: string };
-    setOneTimeToken(grant.token);
-    setGrants((current) => [{ ...grant, token: undefined }, ...current]);
+    const { token, ...storedGrant } = grant;
+    setOneTimeToken(token);
+    setGrants((current) => [storedGrant, ...current]);
     setMessage("Copy the grant now. Knot will not show it again.");
     void loadPlatform();
   }
