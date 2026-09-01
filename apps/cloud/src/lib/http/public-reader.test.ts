@@ -4,6 +4,7 @@ import type {
   PublicAssetStore,
   PublicReaderRepository,
 } from "@/lib/public-reader";
+import { readerCookieName } from "./reader-sessions";
 
 import { createPublicReaderHandlers, publicReaderCsp } from "./public-reader";
 
@@ -123,6 +124,7 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    expect(response.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
     expect(response.headers.has("Set-Cookie")).toBe(false);
     expect(html).toContain(`/media/demo/${publicationId}/${digest}`);
     expect(html).not.toContain("session=dashboard");
@@ -163,17 +165,31 @@ describe("public reader", () => {
     expect(redirect.headers.get("Location")).toBe(
       "https://pages.example.org/access/demo?next=%2Fp%2Fdemo%2Fguide",
     );
+    expect(redirect.headers.get("Cache-Control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(redirect.headers.get("Vary")).toBe("Cookie");
+    expect(redirect.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
 
     const token = `knot_session_${"a".repeat(43)}`;
     const response = await handler.page(
       request(
         "https://pages.example.org/p/demo/guide",
-        `ignored=x; knot_reader_session=${token}`,
+        `ignored=x; ${readerCookieName("demo")}=${token}`,
       ),
       "demo",
       "guide",
     );
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    expect(response.headers.get("CDN-Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
+    );
+    expect(response.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
     expect(resolvePage).toHaveBeenLastCalledWith({
       siteSlug: "demo",
       publicationSlug: "guide",
@@ -202,6 +218,47 @@ describe("public reader", () => {
     expect(deps.repository.resolveCustomDomainSite).toHaveBeenCalledWith(
       "notes.example.org",
     );
+  });
+
+  it("fails custom-domain pages closed without the isolated content environment", async () => {
+    const deps = dependencies({
+      resolveCustomDomainSite: vi.fn().mockResolvedValue({
+        siteSlug: "demo",
+        readerAccess: "public" as const,
+      }),
+    });
+    const response = await createPublicReaderHandlers({
+      ...deps,
+      environment: undefined,
+    }).customPage(request("https://notes.example.org/guide"), "guide");
+    expect(response.status).toBe(404);
+    expect(deps.repository.resolvePage).not.toHaveBeenCalled();
+  });
+
+  it("keeps authenticated custom-domain pages out of shared caches", async () => {
+    const deps = dependencies({
+      resolveCustomDomainSite: vi.fn().mockResolvedValue({
+        siteSlug: "demo",
+        readerAccess: "authenticated" as const,
+      }),
+    });
+    const token = `knot_session_${"a".repeat(43)}`;
+    const response = await createPublicReaderHandlers({
+      ...deps,
+      environment,
+    }).customPage(
+      request(
+        "https://notes.example.org/guide",
+        `${readerCookieName("demo")}=${token}`,
+      ),
+      "guide",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    expect(response.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
   });
 
   it("rechecks active-version membership after the private object read", async () => {
@@ -315,6 +372,29 @@ describe("public reader", () => {
     );
     expect(deps.repository.resolveAsset).toHaveBeenCalledOnce();
     expect(deps.objects.get).not.toHaveBeenCalled();
+  });
+
+  it("never emits shared-cache media headers for an authenticated session", async () => {
+    const deps = dependencies();
+    const token = `knot_session_${"a".repeat(43)}`;
+    const response = await createPublicReaderHandlers({
+      ...deps,
+      environment,
+    }).media(
+      request(
+        `https://pages.example.org/media/demo/${publicationId}/${digest}`,
+        `${readerCookieName("demo")}=${token}`,
+      ),
+      "demo",
+      publicationId,
+      digest,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(response.headers.get("Vary")).toBe("Cookie");
+    expect(response.headers.get("CDN-Cache-Control")).toBe("no-store");
   });
 });
 

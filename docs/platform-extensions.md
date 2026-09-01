@@ -26,11 +26,17 @@ A site is either `public` or `authenticated`. For an authenticated site, an owne
 reader grant with an expiry and redemption cap. The cleartext grant appears once. Postgres stores
 only its digest.
 
-The reader exchanges the grant through `POST /api/v1/reader/sessions`. The exchange creates a
-revocable, bounded session and sets an `HttpOnly`, `SameSite=Strict` cookie on the reader origin.
-The public resolver accepts only an unexpired session whose parent grant is also live. Revoking a
-grant revokes every session created from it. Reader sessions do not authorize dashboard or data API
-access.
+The reader enters the grant at `/access/<site-slug>`. The form sends the grant and expected site to
+`POST /api/v1/reader/sessions` on the same authorized reader host. The host must be the configured
+content origin or the verified custom hostname for that exact site before Postgres consumes the
+grant. The exchange creates a revocable, bounded session and sets an `HttpOnly`, `SameSite=Lax`,
+site-specific cookie on that reader host. The resolver accepts only an unexpired session whose
+parent grant is also live. Revoking a grant revokes every session created from it. Reader sessions
+do not authorize dashboard or data API access.
+
+Authenticated pages, media, redirects, and conditional responses use `private, no-store` plus
+`Vary: Cookie` and explicit no-store headers for shared CDNs. Public digest-addressed media keeps
+the separate must-revalidate policy described in [`public-reader.md`](public-reader.md).
 
 The candidate adds these human-session routes:
 
@@ -44,6 +50,9 @@ The candidate adds these human-session routes:
 | `GET`, `POST /api/v1/session/sites/<site-id>/reader-grants`       | List or create reader grants    |
 | `DELETE /api/v1/session/sites/<site-id>/reader-grants/<grant-id>` | Revoke grant and sessions       |
 | `POST /api/v1/reader/sessions`                                    | Exchange a grant for a session  |
+
+The reader session body is `{ "token": "…", "siteSlug": "…" }`. A token for another site is
+rejected before the transaction increments its redemption count.
 
 Human mutations require a trusted same-origin request and an owner or admin workspace role.
 

@@ -27,9 +27,10 @@ content it may read and publish.
 
 ## Visibility and deletion
 
-The candidate reader serves typed pages and current-version media only on `CONTENT_BASE_URL`.
-Console and API paths return `404` on that origin, and reader paths return `404` on the console
-origin. See [`public-reader.md`](public-reader.md) for the URL shape and deployment checks.
+The candidate reader serves typed pages and current-version media on `CONTENT_BASE_URL` and on a
+verified custom hostname mapped to the exact site. Console and control-plane API paths return `404`
+on reader hosts, and reader-only paths return `404` on the console origin. See
+[`public-reader.md`](public-reader.md) for the URL shape and deployment checks.
 
 Disable clears reader eligibility without deleting stored versions. Rollback selects an earlier
 ready version. Committing a new publication version deliberately clears `disabled_at`, so publishing

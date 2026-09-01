@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 
+import { NeonPublicReaderRepository } from "@/lib/adapters/neon-public-reader";
+import { getContentEnvironment } from "@/lib/env";
 import { safeReaderReturnPath } from "@/lib/reader-access";
+import { readerUrlFromHeaders, resolveReaderOrigin } from "@/lib/reader-origin";
 
 import { ReaderAccessForm } from "./reader-access-form";
 
@@ -14,6 +19,24 @@ export default async function ReaderAccessPage({
   searchParams: Promise<{ next?: string | string[] }>;
 }) {
   const { siteSlug } = await params;
+  const url = readerUrlFromHeaders(await headers());
+  let environment: ReturnType<typeof getContentEnvironment>;
+  try {
+    environment = getContentEnvironment();
+  } catch {
+    environment = undefined;
+  }
+  if (
+    !url ||
+    !(await resolveReaderOrigin({
+      url,
+      environment,
+      repository: new NeonPublicReaderRepository(),
+      siteSlug,
+    }))
+  ) {
+    notFound();
+  }
   const requestedNext = (await searchParams).next;
   const next = Array.isArray(requestedNext) ? requestedNext[0] : requestedNext;
   return (
@@ -29,7 +52,10 @@ export default async function ReaderAccessPage({
           The site owner issued this grant. Knot exchanges it for a revocable
           reader session and never stores the cleartext grant.
         </p>
-        <ReaderAccessForm next={safeReaderReturnPath(next, siteSlug)} />
+        <ReaderAccessForm
+          next={safeReaderReturnPath(next, siteSlug)}
+          siteSlug={siteSlug}
+        />
       </section>
     </main>
   );

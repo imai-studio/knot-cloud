@@ -9,6 +9,7 @@ import type {
   PublicAssetStore,
   PublicReaderRepository,
 } from "@/lib/public-reader";
+import { resolveReaderOrigin } from "@/lib/reader-origin";
 
 const siteSlugPattern = /^[a-z0-9][a-z0-9-]{0,62}$/u;
 const publicationSlugPattern = /^[a-z0-9](?:[a-z0-9/_-]{0,198}[a-z0-9])?$/u;
@@ -66,7 +67,7 @@ export function createPublicReaderHandlers(dependencies: {
         ) {
           return notFound();
         }
-        const sessionDigest = readerSessionDigest(request);
+        const sessionDigest = readerSessionDigest(request, siteSlug);
         const first = await dependencies.repository.resolvePage({
           siteSlug,
           publicationSlug,
@@ -98,7 +99,10 @@ export function createPublicReaderHandlers(dependencies: {
         if (!second || second.versionId !== first.versionId) return notFound();
         return new Response(html, {
           status: 200,
-          headers: readerHeaders({ contentType: "text/html; charset=utf-8" }),
+          headers: readerHeaders({
+            contentType: "text/html; charset=utf-8",
+            authenticated: !!sessionDigest,
+          }),
         });
       } catch {
         return unavailable();
@@ -118,12 +122,22 @@ export function createPublicReaderHandlers(dependencies: {
       }
       try {
         const url = new URL(request.url);
-        if (url.protocol !== "https:" || url.port) return notFound();
+        if (!dependencies.environment) return notFound();
         const site = await dependencies.repository.resolveCustomDomainSite(
           url.hostname.toLowerCase(),
         );
         if (!site) return notFound();
-        const sessionDigest = readerSessionDigest(request);
+        if (
+          (await resolveReaderOrigin({
+            url,
+            environment: dependencies.environment,
+            repository: dependencies.repository,
+            siteSlug: site.siteSlug,
+          })) !== "custom"
+        ) {
+          return notFound();
+        }
+        const sessionDigest = readerSessionDigest(request, site.siteSlug);
         const first = await dependencies.repository.resolvePage({
           siteSlug: site.siteSlug,
           publicationSlug,
@@ -151,7 +165,10 @@ export function createPublicReaderHandlers(dependencies: {
         if (!second || second.versionId !== first.versionId) return notFound();
         return new Response(html, {
           status: 200,
-          headers: readerHeaders({ contentType: "text/html; charset=utf-8" }),
+          headers: readerHeaders({
+            contentType: "text/html; charset=utf-8",
+            authenticated: site.readerAccess === "authenticated",
+          }),
         });
       } catch {
         return unavailable();
@@ -182,7 +199,7 @@ export function createPublicReaderHandlers(dependencies: {
         ) {
           return notFound();
         }
-        const sessionDigest = readerSessionDigest(request);
+        const sessionDigest = readerSessionDigest(request, siteSlug);
         const first = await dependencies.repository.resolveAsset({
           siteSlug,
           publicationId,
@@ -194,7 +211,11 @@ export function createPublicReaderHandlers(dependencies: {
         if (request.headers.get("If-None-Match") === entityTag) {
           return new Response(null, {
             status: 304,
-            headers: readerHeaders({ entityTag, media: true }),
+            headers: readerHeaders({
+              entityTag,
+              media: true,
+              authenticated: !!sessionDigest,
+            }),
           });
         }
         const object = await dependencies.objects.get({
@@ -234,6 +255,7 @@ export function createPublicReaderHandlers(dependencies: {
             disposition: `${inline ? "inline" : "attachment"}; filename="${sha256}"`,
             entityTag,
             media: true,
+            authenticated: !!sessionDigest,
           }),
         });
       } catch {
@@ -257,26 +279,28 @@ function readerAccessRedirect(request: Request, siteSlug: string): Response {
   const url = new URL(request.url);
   const target = new URL(`/access/${encodeURIComponent(siteSlug)}`, url.origin);
   target.searchParams.set("next", `${url.pathname}${url.search}`);
+  const headers = readerHeaders({ authenticated: true });
+  headers.set("Location", target.toString());
   return new Response(null, {
     status: 307,
-    headers: {
-      "Cache-Control": "no-store, max-age=0",
-      Location: target.toString(),
-      "Referrer-Policy": "no-referrer",
-    },
+    headers,
   });
 }
 
-function readerSessionDigest(request: Request): string | undefined {
+function readerSessionDigest(
+  request: Request,
+  siteSlug: string,
+): string | undefined {
+  const cookieName = readerCookieName(siteSlug);
   const cookie = request.headers
     .get("Cookie")
     ?.split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith(`${readerCookieName}=`));
+    .find((part) => part.startsWith(`${cookieName}=`));
   if (!cookie) return undefined;
   let token: string;
   try {
-    token = decodeURIComponent(cookie.slice(readerCookieName.length + 1));
+    token = decodeURIComponent(cookie.slice(cookieName.length + 1));
   } catch {
     return undefined;
   }
@@ -305,21 +329,13 @@ async function acceptsReaderRequest(
   repository: PublicReaderRepository,
   siteSlug: string,
 ): Promise<boolean> {
-  if (!environment) return false;
   try {
-    const url = new URL(request.url);
-    if (url.origin === environment.baseUrl.origin) return true;
-    if (
-      url.protocol !== "https:" ||
-      url.port ||
-      !repository.resolveCustomDomainSite
-    ) {
-      return false;
-    }
-    const custom = await repository.resolveCustomDomainSite(
-      url.hostname.toLowerCase(),
-    );
-    return custom?.siteSlug === siteSlug;
+    return !!(await resolveReaderOrigin({
+      url: new URL(request.url),
+      environment,
+      repository,
+      siteSlug,
+    }));
   } catch {
     return false;
   }
@@ -331,11 +347,15 @@ function readerHeaders(input?: {
   disposition?: string;
   entityTag?: string;
   media?: boolean;
+  authenticated?: boolean;
 }): Headers {
+  const noStore = input?.authenticated || !input?.media;
   const headers = new Headers({
-    "Cache-Control": input?.media
-      ? "public, max-age=0, must-revalidate"
-      : "no-store, max-age=0",
+    "Cache-Control": noStore
+      ? input?.authenticated
+        ? "private, no-store, max-age=0"
+        : "no-store, max-age=0"
+      : "public, max-age=0, must-revalidate",
     "Content-Security-Policy": publicReaderCsp,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -345,6 +365,13 @@ function readerHeaders(input?: {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
   });
+  if (noStore) {
+    headers.set("CDN-Cache-Control", "no-store");
+    headers.set("Cloudflare-CDN-Cache-Control", "no-store");
+    headers.set("Surrogate-Control", "no-store");
+    headers.set("Vercel-CDN-Cache-Control", "no-store");
+  }
+  if (input?.authenticated) headers.set("Vary", "Cookie");
   if (input?.contentType) headers.set("Content-Type", input.contentType);
   if (input?.contentLength !== undefined) {
     headers.set("Content-Length", String(input.contentLength));

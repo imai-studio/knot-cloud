@@ -102,6 +102,7 @@ export interface PlatformRepository {
   }): Promise<boolean>;
   redeemReaderGrant(input: {
     grantDigest: string;
+    expectedSiteSlug: string;
     sessionId: string;
     sessionDigest: string;
     sessionExpiresAt: Date;
@@ -281,11 +282,13 @@ export class PlatformService {
       .then((grant) => ({ grant, token }));
   }
 
-  async redeemReaderGrant(token: string) {
+  async redeemReaderGrant(token: string, expectedSiteSlug: string) {
     if (!/^knot_reader_[A-Za-z0-9_-]{43}$/u.test(token)) return undefined;
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/u.test(expectedSiteSlug)) return undefined;
     const sessionToken = `knot_session_${randomBytes(32).toString("base64url")}`;
     const redeemed = await this.repository.redeemReaderGrant({
       grantDigest: sha256(token),
+      expectedSiteSlug,
       sessionId: randomUUID(),
       sessionDigest: sha256(sessionToken),
       sessionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),

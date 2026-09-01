@@ -1,14 +1,24 @@
+import { NeonPublicReaderRepository } from "@/lib/adapters/neon-public-reader";
 import { NeonPlatformRepository } from "@/lib/adapters/neon-platform";
+import { getContentEnvironment, type ContentEnvironment } from "@/lib/env";
 import { PlatformService } from "@/lib/platform";
+import { resolveReaderOrigin } from "@/lib/reader-origin";
 
 import { jsonResponse, problemResponse } from "./problem";
 
 const bodyLimit = 8 * 1024;
-export const readerCookieName = "knot_reader_session";
+const siteSlugPattern = /^[a-z0-9][a-z0-9-]{0,62}$/u;
+
+export function readerCookieName(siteSlug: string): string {
+  if (!siteSlugPattern.test(siteSlug)) throw new TypeError("Invalid site slug");
+  return `knot_reader_session_${siteSlug}`;
+}
 
 export function createReaderSessionHandler(input: {
+  authorize(request: Request, siteSlug: string): Promise<boolean>;
   redeem(
     token: string,
+    siteSlug: string,
   ): Promise<
     | { siteSlug: string; sessionToken: string; sessionExpiresAt: Date }
     | undefined
@@ -23,9 +33,9 @@ export function createReaderSessionHandler(input: {
         title: "The request origin is not trusted",
       });
     }
-    let token: string;
+    let credentials: { token: string; siteSlug: string };
     try {
-      token = await readToken(request);
+      credentials = await readCredentials(request);
     } catch {
       return problemResponse({
         request,
@@ -34,8 +44,19 @@ export function createReaderSessionHandler(input: {
         title: "The reader grant is invalid",
       });
     }
-    const redeemed = await input.redeem(token);
-    if (!redeemed) {
+    if (!(await input.authorize(request, credentials.siteSlug))) {
+      return problemResponse({
+        request,
+        status: 404,
+        code: "not-found",
+        title: "The reader site was not found",
+      });
+    }
+    const redeemed = await input.redeem(
+      credentials.token,
+      credentials.siteSlug,
+    );
+    if (!redeemed || redeemed.siteSlug !== credentials.siteSlug) {
       return problemResponse({
         request,
         status: 401,
@@ -48,6 +69,7 @@ export function createReaderSessionHandler(input: {
       "Set-Cookie",
       serializeReaderCookie(
         request,
+        redeemed.siteSlug,
         redeemed.sessionToken,
         redeemed.sessionExpiresAt,
       ),
@@ -57,14 +79,33 @@ export function createReaderSessionHandler(input: {
 }
 
 export function createProductionReaderSessionHandler() {
-  const repository = new NeonPlatformRepository();
-  const service = new PlatformService(repository, undefined, {
+  const platformRepository = new NeonPlatformRepository();
+  const readerRepository = new NeonPublicReaderRepository();
+  const service = new PlatformService(platformRepository, undefined, {
     async resolve() {
       return [];
     },
   });
+  let environment: ContentEnvironment | undefined;
+  try {
+    environment = getContentEnvironment();
+  } catch {
+    environment = undefined;
+  }
   return createReaderSessionHandler({
-    redeem: (token) => service.redeemReaderGrant(token),
+    authorize: async (request, siteSlug) => {
+      try {
+        return !!(await resolveReaderOrigin({
+          url: new URL(request.url),
+          environment,
+          repository: readerRepository,
+          siteSlug,
+        }));
+      } catch {
+        return false;
+      }
+    },
+    redeem: (token, siteSlug) => service.redeemReaderGrant(token, siteSlug),
   });
 }
 
@@ -78,7 +119,9 @@ function isSameOrigin(request: Request): boolean {
   }
 }
 
-async function readToken(request: Request): Promise<string> {
+async function readCredentials(
+  request: Request,
+): Promise<{ token: string; siteSlug: string }> {
   const declared = request.headers.get("Content-Length");
   if (declared && Number(declared) > bodyLimit) throw new Error("too-large");
   const bytes = new Uint8Array(await request.arrayBuffer());
@@ -94,33 +137,38 @@ async function readToken(request: Request): Promise<string> {
       !parsed ||
       typeof parsed !== "object" ||
       Array.isArray(parsed) ||
-      typeof (parsed as { token?: unknown }).token !== "string"
+      typeof (parsed as { token?: unknown }).token !== "string" ||
+      typeof (parsed as { siteSlug?: unknown }).siteSlug !== "string" ||
+      !siteSlugPattern.test((parsed as { siteSlug: string }).siteSlug)
     ) {
       throw new Error("invalid");
     }
-    return (parsed as { token: string }).token;
+    return parsed as { token: string; siteSlug: string };
   }
   if (contentType === "application/x-www-form-urlencoded") {
-    const token = new URLSearchParams(new TextDecoder().decode(bytes)).get(
-      "token",
-    );
-    if (!token) throw new Error("invalid");
-    return token;
+    const form = new URLSearchParams(new TextDecoder().decode(bytes));
+    const token = form.get("token");
+    const siteSlug = form.get("siteSlug");
+    if (!token || !siteSlug || !siteSlugPattern.test(siteSlug)) {
+      throw new Error("invalid");
+    }
+    return { token, siteSlug };
   }
   throw new Error("content-type");
 }
 
 function serializeReaderCookie(
   request: Request,
+  siteSlug: string,
   token: string,
   expiresAt: Date,
 ): string {
   const secure = new URL(request.url).protocol === "https:";
   return [
-    `${readerCookieName}=${encodeURIComponent(token)}`,
+    `${readerCookieName(siteSlug)}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     secure ? "Secure" : undefined,
     `Expires=${expiresAt.toUTCString()}`,
   ]

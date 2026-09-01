@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function ReaderAccessForm({ next }: { next: string }) {
+export function ReaderAccessForm({
+  next,
+  siteSlug,
+}: {
+  next: string;
+  siteSlug: string;
+}) {
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);
 
@@ -16,7 +22,7 @@ export function ReaderAccessForm({ next }: { next: string }) {
     const response = await fetch("/api/v1/reader/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: formData.get("token") }),
+      body: JSON.stringify({ token: formData.get("token"), siteSlug }),
     });
     if (!response.ok) {
       setPending(false);

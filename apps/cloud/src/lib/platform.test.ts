@@ -120,15 +120,18 @@ describe("platform service", () => {
     expect(createInput?.tokenDigest).toBe(sha256(token));
     expect(JSON.stringify(createInput)).not.toContain(token);
 
-    const redeemed = await service.redeemReaderGrant(token);
+    const redeemed = await service.redeemReaderGrant(token, "guide");
     expect(redeemed?.siteSlug).toBe("guide");
     expect(redeemed?.sessionToken).toMatch(/^knot_session_[A-Za-z0-9_-]{43}$/u);
     const redeemInput = vi.mocked(repo.redeemReaderGrant).mock.calls[0]?.[0];
     expect(redeemInput?.grantDigest).toBe(sha256(token));
+    expect(redeemInput?.expectedSiteSlug).toBe("guide");
     expect(redeemInput?.sessionDigest).toBe(
       sha256(redeemed?.sessionToken ?? ""),
     );
-    await expect(service.redeemReaderGrant("bad")).resolves.toBeUndefined();
+    await expect(
+      service.redeemReaderGrant("bad", "guide"),
+    ).resolves.toBeUndefined();
   });
 
   it("accepts only bare, canonical hostnames", () => {

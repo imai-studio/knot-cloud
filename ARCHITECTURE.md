@@ -100,11 +100,12 @@ flowchart LR
   Resolver --> R2[(Private R2)]
 ```
 
-Grant exchange consumes a bounded redemption under a row lock. Reader cookies are host-only,
-`HttpOnly`, and `SameSite=Strict`; they grant no dashboard or data API authority. Revoking a grant
-revokes its sessions. Typed provider boundaries for billing, media derivatives, and hosted
-connectors remain unavailable until their external provider, licensing, isolation, KMS, and
-recovery requirements are implemented. See
+Grant exchange consumes a bounded redemption under a row lock and requires the requested site to
+match before it consumes the grant. Reader cookies are host-only, site-specific, `HttpOnly`, and
+`SameSite=Lax`; they grant no dashboard or data API authority. Authenticated responses are private
+and `no-store` at browser and CDN layers. Revoking a grant revokes its sessions. Typed provider
+boundaries for billing, media derivatives, and hosted connectors remain unavailable until their
+external provider, licensing, isolation, KMS, and recovery requirements are implemented. See
 [`docs/platform-extensions.md`](docs/platform-extensions.md).
 
 ## Self-hosting boundary

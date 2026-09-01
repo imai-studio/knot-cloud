@@ -159,7 +159,7 @@ export class NeonPlatformRepository implements PlatformRepository {
     const rows = await getSql()`
       SELECT * FROM redeem_reader_grant(
         ${input.grantDigest}, ${input.sessionId}::uuid, ${input.sessionDigest},
-        ${input.sessionExpiresAt}
+        ${input.sessionExpiresAt}, ${input.expectedSiteSlug}
       )
     `;
     const row = rows[0] as

@@ -297,7 +297,11 @@ BEGIN
      platform_limit_value(p_tenant_id, 'custom-domains') THEN
     RAISE EXCEPTION 'custom domain quota exceeded' USING ERRCODE = 'P0001';
   END IF;
-  IF p_challenge_expires_at <= now() OR p_challenge_expires_at > now() + interval '7 days' THEN
+  -- The application issues seven-day challenges using its own clock. Permit a
+  -- small, bounded lead over the database clock so harmless host skew does not
+  -- reject a freshly issued challenge.
+  IF p_challenge_expires_at <= now()
+     OR p_challenge_expires_at > now() + interval '7 days 5 minutes' THEN
     RAISE EXCEPTION 'invalid domain challenge expiry' USING ERRCODE = '22023';
   END IF;
   INSERT INTO custom_domains (
@@ -447,7 +451,8 @@ CREATE FUNCTION redeem_reader_grant(
   p_grant_digest text,
   p_session_id uuid,
   p_session_digest text,
-  p_session_expires_at timestamptz
+  p_session_expires_at timestamptz,
+  p_expected_site_slug text
 )
 RETURNS TABLE (tenant_id uuid, site_id uuid, site_slug text, session_expires_at timestamptz)
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
@@ -455,8 +460,13 @@ AS $$
 DECLARE v_grant reader_grants%ROWTYPE;
 DECLARE v_expiry timestamptz;
 BEGIN
-  SELECT * INTO v_grant FROM reader_grants
-  WHERE token_digest = p_grant_digest FOR UPDATE;
+  SELECT reader_grant.* INTO v_grant
+  FROM reader_grants AS reader_grant
+  JOIN sites AS site
+    ON site.tenant_id = reader_grant.tenant_id AND site.id = reader_grant.site_id
+  WHERE reader_grant.token_digest = p_grant_digest
+    AND site.slug = p_expected_site_slug
+  FOR UPDATE OF reader_grant;
   IF NOT FOUND OR v_grant.revoked_at IS NOT NULL OR v_grant.expires_at <= now()
     OR v_grant.redemption_count >= v_grant.max_redemptions THEN
     RETURN;
@@ -559,8 +569,6 @@ AS $$
 $$;
 
 RESET ROLE;
-REVOKE CREATE ON SCHEMA public FROM knot_resolver;
-REVOKE knot_resolver FROM CURRENT_USER;
 
 CREATE FUNCTION resolve_reader_page(
   requested_site_slug text,
@@ -760,7 +768,7 @@ REVOKE ALL ON FUNCTION record_custom_domain_check(uuid,uuid,uuid,text,boolean,te
 REVOKE ALL ON FUNCTION disable_custom_domain(uuid,uuid,uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION create_reader_grant(uuid,uuid,uuid,uuid,text,text,timestamptz,integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION revoke_reader_grant(uuid,uuid,uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION redeem_reader_grant(text,uuid,text,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION redeem_reader_grant(text,uuid,text,timestamptz,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION reader_session_authorizes(uuid,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_reader_page(text,text,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION resolve_reader_asset(text,uuid,text,text) FROM PUBLIC;
@@ -776,7 +784,7 @@ GRANT EXECUTE ON FUNCTION record_custom_domain_check(uuid,uuid,uuid,text,boolean
 GRANT EXECUTE ON FUNCTION disable_custom_domain(uuid,uuid,uuid) TO knot_app;
 GRANT EXECUTE ON FUNCTION create_reader_grant(uuid,uuid,uuid,uuid,text,text,timestamptz,integer) TO knot_app;
 GRANT EXECUTE ON FUNCTION revoke_reader_grant(uuid,uuid,uuid) TO knot_app;
-GRANT EXECUTE ON FUNCTION redeem_reader_grant(text,uuid,text,timestamptz) TO knot_app;
+GRANT EXECUTE ON FUNCTION redeem_reader_grant(text,uuid,text,timestamptz,text) TO knot_app;
 GRANT EXECUTE ON FUNCTION reader_session_authorizes(uuid,text) TO knot_app;
 GRANT EXECUTE ON FUNCTION resolve_reader_page(text,text,text) TO knot_app;
 GRANT EXECUTE ON FUNCTION resolve_reader_asset(text,uuid,text,text) TO knot_app;
@@ -787,26 +795,14 @@ GRANT EXECUTE ON FUNCTION get_platform_usage(uuid) TO knot_app;
 GRANT EXECUTE ON FUNCTION control_publication_as_human(uuid,uuid,uuid,text,uuid) TO knot_app;
 
 -- Public reader token exchange and resolution deliberately run as the narrow
--- resolver role, never as the migration owner.
-GRANT knot_resolver TO CURRENT_USER;
+-- resolver role, never as the migration owner. The membership and temporary
+-- schema CREATE privilege granted above must remain until every ownership
+-- transfer is complete; PostgreSQL requires both for a non-superuser owner
+-- transfer.
 GRANT SELECT ON custom_domains, reader_grants, reader_sessions TO knot_resolver;
 GRANT UPDATE ON reader_grants, reader_sessions TO knot_resolver;
 GRANT INSERT ON reader_sessions TO knot_resolver;
-ALTER FUNCTION redeem_reader_grant(text,uuid,text,timestamptz) OWNER TO knot_resolver;
-ALTER FUNCTION reader_session_authorizes(uuid,text) OWNER TO knot_resolver;
-ALTER FUNCTION resolve_reader_page(text,text,text) OWNER TO knot_resolver;
-ALTER FUNCTION resolve_reader_asset(text,uuid,text,text) OWNER TO knot_resolver;
-ALTER FUNCTION resolve_custom_domain_reader_page(text,text,text) OWNER TO knot_resolver;
-ALTER FUNCTION resolve_custom_domain_site(text) OWNER TO knot_resolver;
-ALTER FUNCTION resolve_reader_site_access(text) OWNER TO knot_resolver;
-REVOKE knot_resolver FROM CURRENT_USER;
-
-GRANT knot_resolver TO CURRENT_USER;
-GRANT CREATE ON SCHEMA public TO knot_resolver;
-GRANT SELECT ON custom_domains, reader_grants, reader_sessions TO knot_resolver;
-GRANT UPDATE ON reader_grants, reader_sessions TO knot_resolver;
-GRANT INSERT ON reader_sessions TO knot_resolver;
-ALTER FUNCTION redeem_reader_grant(text,uuid,text,timestamptz) OWNER TO knot_resolver;
+ALTER FUNCTION redeem_reader_grant(text,uuid,text,timestamptz,text) OWNER TO knot_resolver;
 ALTER FUNCTION reader_session_authorizes(uuid,text) OWNER TO knot_resolver;
 ALTER FUNCTION resolve_reader_page(text,text,text) OWNER TO knot_resolver;
 ALTER FUNCTION resolve_reader_asset(text,uuid,text,text) OWNER TO knot_resolver;
