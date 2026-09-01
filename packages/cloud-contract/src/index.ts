@@ -14,3 +14,4 @@ export * from "./problem.js";
 export * from "./protocol.js";
 export * from "./publication.js";
 export * from "./signing.js";
+export * from "./transactional-event.js";

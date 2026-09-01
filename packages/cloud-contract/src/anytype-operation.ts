@@ -7,6 +7,7 @@ import {
   unixSecondsSchema,
 } from "./identifiers.js";
 import { protocolVersion, type ScopeName } from "./protocol.js";
+import { channelOriginPointerSchema } from "./transactional-event.js";
 
 export const propertyValueSchema = z.union([
   z.boolean(),
@@ -101,12 +102,26 @@ export const anytypeOperationSchema = z.discriminatedUnion("type", [
     chatId: opaqueIdSchema,
     limit: z.number().int().min(1).max(100).default(50),
   }),
-  z.object({
-    type: z.literal("chat.send"),
-    spaceId: opaqueIdSchema,
-    chatId: opaqueIdSchema,
-    message: z.string().min(1).max(100_000),
-  }),
+  z
+    .object({
+      type: z.literal("chat.send"),
+      spaceId: opaqueIdSchema,
+      chatId: opaqueIdSchema,
+      message: z.string().min(1).max(100_000),
+      channelOrigin: channelOriginPointerSchema,
+    })
+    .superRefine((value, context) => {
+      if (
+        value.channelOrigin.spaceId !== value.spaceId ||
+        value.channelOrigin.chatId !== value.chatId
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["channelOrigin"],
+          message: "chat.send must be authorized from the destination channel",
+        });
+      }
+    }),
 ]);
 
 export const anytypeOperationRequestSchema = z

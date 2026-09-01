@@ -8,6 +8,7 @@ import {
   parseUpstashEnvironment,
   signingAuthoritiesFromEnvironment,
   trustedAuthOriginsFromEnvironment,
+  webhookDestinationsFromEnvironment,
 } from "./env";
 
 const required = {
@@ -33,9 +34,25 @@ describe("cloud environment", () => {
     expect(environment.API_KEY_PEPPER_PREVIOUS).toBeUndefined();
     expect(environment.AUTH_TRUSTED_ORIGINS).toBeUndefined();
     expect(environment.KNOT_SIGNING_AUTHORITIES).toBeUndefined();
+    expect(environment.WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS).toBe(50);
     expect(signingAuthoritiesFromEnvironment(environment)).toEqual([
       "cloud.knot.test",
     ]);
+  });
+
+  it("validates the deployment-wide per-workspace webhook cap", () => {
+    expect(
+      parseCloudEnvironment({
+        ...required,
+        WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS: "12",
+      }).WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS,
+    ).toBe(12);
+    expect(() =>
+      parseCloudEnvironment({
+        ...required,
+        WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS: "0",
+      }),
+    ).toThrow();
   });
 
   it("normalizes and deduplicates trusted authentication origins", () => {
@@ -60,6 +77,49 @@ describe("cloud environment", () => {
       "cloud.knot.test",
       "[::1]:3000",
     ]);
+  });
+});
+
+describe("webhook destinations", () => {
+  it("accepts only named fixed HTTPS destinations", () => {
+    const destinations = webhookDestinationsFromEnvironment({
+      WEBHOOK_DESTINATIONS_JSON: JSON.stringify({
+        automation: {
+          url: "https://hooks.example/events",
+          secret: "s".repeat(32),
+        },
+      }),
+    });
+    expect(destinations.get("automation")?.url).toBe(
+      "https://hooks.example/events",
+    );
+  });
+
+  it("rejects caller-like URLs and secrets outside deployment configuration", () => {
+    expect(() =>
+      webhookDestinationsFromEnvironment({
+        WEBHOOK_DESTINATIONS_JSON: JSON.stringify({
+          automation: {
+            url: "http://127.0.0.1:3000/steal?token=x",
+            secret: "s".repeat(32),
+          },
+        }),
+      }),
+    ).toThrow(/fixed HTTPS/u);
+    for (const url of [
+      "https://127.0.0.1/events",
+      "https://[::1]/events",
+      "https://agent.local/events",
+      "https://localhost/events",
+    ]) {
+      expect(() =>
+        webhookDestinationsFromEnvironment({
+          WEBHOOK_DESTINATIONS_JSON: JSON.stringify({
+            automation: { url, secret: "s".repeat(32) },
+          }),
+        }),
+      ).toThrow(/public hostname/u);
+    }
   });
 });
 
