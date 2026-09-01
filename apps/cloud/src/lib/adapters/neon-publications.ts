@@ -6,6 +6,7 @@ import type {
   ConnectorPublicationStatus,
   PublicationRecord,
   PublicationRepository,
+  PublicationVersionRecord,
   SiteRecord,
 } from "@/lib/publications";
 
@@ -55,6 +56,24 @@ export class NeonPublicationRepository implements PublicationRepository {
       `,
     ]);
     return rows.map(mapPublication);
+  }
+
+  async listPublicationVersions(input: {
+    tenantId: string;
+    publicationId: string;
+  }): Promise<PublicationVersionRecord[]> {
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT id, state::text, schema_version, content_sha256,
+               created_by_connector_id, created_at, committed_at
+        FROM publication_versions
+        WHERE tenant_id = ${input.tenantId}::uuid
+          AND publication_id = ${input.publicationId}::uuid
+        ORDER BY created_at DESC, id DESC
+        LIMIT 100
+      `,
+    ]);
+    return rows.map(mapPublicationVersion);
   }
 
   async prepareAssetUpload(input: {
@@ -493,5 +512,26 @@ function mapPublication(value: unknown): PublicationRecord {
     disabledAt: row.disabled_at ?? undefined,
     unpublishedAt: row.unpublished_at ?? undefined,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapPublicationVersion(value: unknown): PublicationVersionRecord {
+  const row = value as {
+    id: string;
+    state: PublicationVersionRecord["state"];
+    schema_version: string;
+    content_sha256: string;
+    created_by_connector_id: string;
+    created_at: Date;
+    committed_at: Date | null;
+  };
+  return {
+    id: row.id,
+    state: row.state,
+    schemaVersion: row.schema_version,
+    contentSha256: row.content_sha256,
+    connectorId: row.created_by_connector_id,
+    createdAt: row.created_at,
+    committedAt: row.committed_at ?? undefined,
   };
 }

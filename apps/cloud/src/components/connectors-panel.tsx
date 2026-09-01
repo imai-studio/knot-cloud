@@ -165,12 +165,42 @@ export function ConnectorsPanel({
         Connector access
       </Badge>
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-        Connectors
+        Connect local Knot
       </h1>
       <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-        Review the identity and requested access of each local Knot runtime
-        before it can use this workspace.
+        Pair one local runtime at a time. The private signing key and Anytype
+        authority stay on that machine.
       </p>
+
+      <ol className="mt-8 grid border-y sm:grid-cols-3 sm:divide-x">
+        {[
+          {
+            title: "Generate a local identity",
+            detail:
+              "On the agent machine, have Knot generate or show its connector name and 43-character public key.",
+          },
+          {
+            title: "Choose cloud access",
+            detail:
+              "Paste only the public key, then select the exact scopes and known sites this connector needs.",
+          },
+          {
+            title: "Finish on the same machine",
+            detail:
+              "Copy the one-time pairing bundle back to local Knot. Approve only after both public keys match.",
+          },
+        ].map((step, index) => (
+          <li className="px-1 py-5 sm:px-5" key={step.title}>
+            <p className="font-mono text-xs text-muted-foreground">
+              Step {index + 1}
+            </p>
+            <h2 className="mt-2 font-medium">{step.title}</h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              {step.detail}
+            </p>
+          </li>
+        ))}
+      </ol>
 
       {error ? (
         <Alert variant="destructive" className="mt-6">
@@ -183,11 +213,12 @@ export function ConnectorsPanel({
       {pairingSecret ? (
         <Alert className="mt-6">
           <KeyRound />
-          <AlertTitle>Copy the one-time pairing credentials now</AlertTitle>
+          <AlertTitle>Step 3: continue on the local Knot machine</AlertTitle>
           <AlertDescription>
             <p>
-              Knot Cloud stores only the token digest. The raw token will not be
-              shown again.
+              Copy this bundle into the local pairing flow now. Knot Cloud
+              stores only the token digest, so the raw token cannot be shown
+              again.
             </p>
             <dl className="mt-3 grid gap-2 font-mono text-xs">
               <div>
@@ -220,7 +251,7 @@ export function ConnectorsPanel({
               }
             >
               <Copy />
-              Copy credentials
+              Copy one-time pairing bundle
             </Button>
           </AlertDescription>
         </Alert>
@@ -229,11 +260,11 @@ export function ConnectorsPanel({
       {canManage ? (
         <section className="mt-10 border-t pt-8">
           <h2 className="font-heading text-xl font-medium">
-            Start a pairing request
+            Step 2: configure the pairing request
           </h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Enter the name and public key shown by the local connector. Its
-            private key never leaves that machine.
+            Enter the values shown by local Knot. Do not paste a private key,
+            Anytype credential, or API key here.
           </p>
           <form className="mt-5 grid gap-5" onSubmit={createPairing}>
             <div className="grid gap-2 sm:grid-cols-2 sm:gap-4">
@@ -324,7 +355,8 @@ export function ConnectorsPanel({
             </fieldset>
             <div className="space-y-2">
               <Label htmlFor="connector-slugs">
-                Slug grants <span className="font-normal">(optional)</span>
+                Publication paths{" "}
+                <span className="font-normal">(advanced, optional)</span>
               </Label>
               <Input
                 id="connector-slugs"
@@ -333,7 +365,8 @@ export function ConnectorsPanel({
                 onChange={(event) => setSlugGrants(event.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Separate grants with commas. A trailing /* permits descendants.
+                Separate paths with commas. A trailing /* includes descendants,
+                so use it only when the connector needs that whole path.
               </p>
             </div>
             <Button
@@ -344,7 +377,7 @@ export function ConnectorsPanel({
               {busy === "create" ? (
                 <RefreshCw className="animate-spin" />
               ) : null}
-              Create request
+              Create one-time pairing request
             </Button>
           </form>
         </section>
@@ -358,7 +391,8 @@ export function ConnectorsPanel({
                 Pairing requests
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Compare these values with the local connector before approval.
+                Approve only when the name, public key, scopes, and sites match
+                what local Knot shows.
               </p>
             </div>
             <Badge variant="secondary">{pairings.length}</Badge>

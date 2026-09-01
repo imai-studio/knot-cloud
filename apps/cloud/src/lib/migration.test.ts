@@ -255,6 +255,41 @@ describe("P0 database isolation", () => {
     expect(result.rows).toEqual([{ id: tenantA }]);
   });
 
+  it("keeps audit pagination tenant-isolated and indexed", async () => {
+    await database.exec(`
+      INSERT INTO audit_events (
+        tenant_id, principal_kind, action, target_kind, outcome, created_at
+      ) VALUES
+        ('${tenantA}', 'human-session', 'connector.rename', 'connector', 'succeeded', '2026-09-02T12:00:00Z'),
+        ('${tenantB}', 'human-session', 'api-key.create', 'api-key', 'succeeded', '2026-09-02T12:01:00Z');
+      SET ROLE knot_app;
+    `);
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantA,
+    ]);
+    const visible = await database.query<{ action: string }>(
+      "SELECT action FROM audit_events ORDER BY created_at DESC, id DESC",
+    );
+    expect(visible.rows).toEqual([{ action: "connector.rename" }]);
+
+    await database.exec("RESET ROLE");
+    const indexes = await database.query<{ indexname: string }>(`
+      SELECT indexname FROM pg_indexes
+      WHERE schemaname = 'public' AND tablename = 'audit_events'
+        AND indexname IN (
+          'audit_events_tenant_cursor_idx',
+          'audit_events_tenant_action_created_idx',
+          'audit_events_tenant_outcome_created_idx'
+        )
+      ORDER BY indexname
+    `);
+    expect(indexes.rows.map((row) => row.indexname)).toEqual([
+      "audit_events_tenant_action_created_idx",
+      "audit_events_tenant_cursor_idx",
+      "audit_events_tenant_outcome_created_idx",
+    ]);
+  });
+
   it("rejects cross-tenant references and runtime DDL", async () => {
     await database.exec("SET ROLE knot_app");
     await database.query("SELECT set_config('app.tenant_id', $1, false)", [

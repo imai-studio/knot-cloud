@@ -206,6 +206,7 @@ function publicationRepository(
     listSites: vi.fn(),
     createSite: vi.fn(),
     listPublications: vi.fn(),
+    listPublicationVersions: vi.fn(),
     prepareAssetUpload: vi.fn(),
     commitAssetUpload: vi.fn(),
     preparePublicationVersion: vi.fn(),

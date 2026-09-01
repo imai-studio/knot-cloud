@@ -140,6 +140,38 @@ describe("human publication HTTP service", () => {
     expect(body.code).toBe("internal-error");
     expect(body.retryable).toBe(true);
   });
+
+  it("lists bounded publication version metadata for the active tenant", async () => {
+    const listPublicationVersions = vi.fn().mockResolvedValue([
+      {
+        id: "00000000-0000-4000-8000-000000000041",
+        state: "ready",
+        schemaVersion: "1.0",
+        contentSha256: "a".repeat(64),
+        connectorId: "00000000-0000-4000-8000-000000000051",
+        createdAt: new Date("2026-09-02T12:00:00.000Z"),
+        committedAt: new Date("2026-09-02T12:01:00.000Z"),
+      },
+    ]);
+    const handlers = createHumanPublicationHandlers({
+      repository: publicationRepository({ listPublicationVersions }),
+      service: { control: vi.fn() },
+    });
+    const response = await handlers.listPublicationVersions(
+      new Request(
+        `https://knot.test/api/v1/session/publications/${publicationId}/versions`,
+      ),
+      publicationId,
+    );
+    expect(response.status).toBe(200);
+    expect(listPublicationVersions).toHaveBeenCalledWith({
+      tenantId,
+      publicationId,
+    });
+    await expect(response.json()).resolves.toMatchObject([
+      { state: "ready", createdAt: "2026-09-02T12:00:00.000Z" },
+    ]);
+  });
 });
 
 function publicationRepository(
@@ -149,6 +181,7 @@ function publicationRepository(
     listSites: vi.fn().mockResolvedValue([]),
     createSite: vi.fn(),
     listPublications: vi.fn().mockResolvedValue([]),
+    listPublicationVersions: vi.fn().mockResolvedValue([]),
     prepareAssetUpload: vi.fn(),
     commitAssetUpload: vi.fn(),
     preparePublicationVersion: vi.fn(),

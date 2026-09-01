@@ -29,6 +29,16 @@ export interface PublicationRecord {
   updatedAt: Date;
 }
 
+export interface PublicationVersionRecord {
+  id: string;
+  state: "draft" | "ready" | "disabled" | "unpublished" | "abandoned";
+  schemaVersion: string;
+  contentSha256: string;
+  connectorId: string;
+  createdAt: Date;
+  committedAt?: Date;
+}
+
 export interface ConnectorPublicationStatus {
   publicationId: string;
   siteId: string;
@@ -64,6 +74,10 @@ export interface PublicationRepository {
     tenantId: string;
     siteId: string;
   }): Promise<PublicationRecord[]>;
+  listPublicationVersions(input: {
+    tenantId: string;
+    publicationId: string;
+  }): Promise<PublicationVersionRecord[]>;
   prepareAssetUpload(input: {
     tenantId: string;
     connectorId: string;
