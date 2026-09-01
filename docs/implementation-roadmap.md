@@ -1,19 +1,19 @@
 # Implementation roadmap
 
-This roadmap orders work by dependency. A phase can start in parallel where its inputs are stable,
-but it cannot release until every earlier gate it relies on has passed.
+This roadmap orders unreleased work by dependency. Work may proceed in parallel when its inputs are
+stable. A feature cannot release until its listed prerequisites pass.
 
 ## P0. Deployed foundation
 
 P0 released on 2026-09-01.
 
-P0 includes the invitation-only console, protocol contracts, database schema, provider adapters,
+P0 includes the invitation-only console, protocol contracts, database schema, provider boundaries,
 security tests, and deployment checks. It does not include a usable connector, publishing service,
-or data API. The release record is in [`releases.md`](releases.md).
+or data API. See [`releases.md`](releases.md) for the release record.
 
 ## P1. Close production gates
 
-P1 depends on P0.
+Prerequisite: P0.
 
 - Choose and record a separate registrable domain for public reader content.
 - Check the first local connector candidate against the versioned protocol fixtures.
@@ -22,12 +22,12 @@ P1 depends on P0.
 - Provision the replay nonce store before enabling any signed mutation route.
 - Record CSP, cookie, DNS, and cross-origin tests for the chosen reader domain.
 
-P1 does not add a customer-facing route. It closes the infrastructure and browser gates that later
-routes depend on.
+P1 does not add a user-facing route. It closes infrastructure and browser security gates needed by
+later routes.
 
 ## P2. Tenant bootstrap and connector pairing
 
-P2 depends on the P1 replay protection and managed-database tests.
+Prerequisites: P1 replay protection and managed-database tests.
 
 - Create or reuse the operator's tenant after an allowed email signs in.
 - Add a short-lived, single-use pairing challenge initiated by a human session.
@@ -36,12 +36,12 @@ P2 depends on the P1 replay protection and managed-database tests.
 - Add connector status, scope review, rename, and revoke controls to the dashboard.
 - Test replay, protocol skew, stale leases, connector revocation, and cross-tenant access.
 
-The local connector still applies its own policy. A cloud scope permits a request to enter the queue;
-it does not grant local Anytype or filesystem access.
+The local connector still applies its own policy. A cloud scope permits a request to enter the
+queue. It does not grant local Anytype or filesystem access.
 
 ## P3. Publication lifecycle
 
-P3 depends on P2 connector identity and the P1 reader-domain decision.
+Prerequisites: P2 connector identity and the P1 reader-domain decision.
 
 - Add site and publication management for human sessions.
 - Accept typed publication bundles and bounded asset streams from an authorized connector.
@@ -52,12 +52,12 @@ P3 depends on P2 connector identity and the P1 reader-domain decision.
 - Drain the durable deletion outbox until the publication bundle and its unshared assets are gone.
 - Test interruption recovery and immediate 404 behavior for pages and media.
 
-P3 releases publishing only after disable and unpublish pass failure-injection tests. A successful
-upload without those controls is not a releasable publication path.
+Publishing can release only after disable and unpublish pass failure-injection tests. An upload path
+without those controls is incomplete.
 
 ## P4. Scoped Anytype data API
 
-P4 depends on P2 command transport and stable local operation handlers.
+Prerequisites: P2 command transport and stable local operation handlers.
 
 - Add human controls to create, inspect, rotate, and revoke consumer API keys.
 - Bind each key to explicit scopes and one or more connectors.
@@ -67,12 +67,12 @@ P4 depends on P2 command transport and stable local operation handlers.
   HTTP, filesystem paths, or model tools.
 - Enforce quotas, expiry, idempotency, audit digests, and tenant isolation.
 
-P4 is asynchronous. The cloud accepts a typed intent, and the chosen local connector decides whether
+P4 is asynchronous. Knot Cloud accepts a typed intent. The selected local connector decides whether
 to execute it.
 
 ## P5. Local CLI and MCP integration
 
-P5 depends on P2 pairing. Each command also depends on its P3 or P4 server route.
+Prerequisite: P2 pairing. Each command also requires its P3 or P4 server route.
 
 - Add local login and pairing commands to Knot.
 - Add connector status, revoke, and diagnostic commands.
@@ -84,7 +84,7 @@ P5 depends on P2 pairing. Each command also depends on its P3 or P4 server route
 
 ## P6. Workflow integration
 
-P6 depends on the local Knot workflow runner and the released P3 or P4 operations.
+Prerequisites: the local Knot workflow runner and the relevant released P3 or P4 operations.
 
 - Send cloud publication and Anytype operation events into the existing local runner.
 - Add transactional channel actions through that runner instead of building a second scheduler.
@@ -93,7 +93,7 @@ P6 depends on the local Knot workflow runner and the released P3 or P4 operation
 
 ## P7. Later product work
 
-P7 depends on stable security and recovery evidence from P2 through P6.
+Prerequisite: security and recovery evidence from P2 through P6.
 
 - Custom reader domains.
 - Authenticated reader sites.

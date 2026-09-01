@@ -4,7 +4,7 @@ Knot Cloud coordinates work for local Knot installations. It does not grant an a
 Anytype or the operator's machine. The local Knot configuration remains the authority for every
 operation.
 
-## Deployed P0
+## Deployed P0 components
 
 The current production deployment has four services.
 
@@ -20,10 +20,10 @@ separate owner credential that never enters the Vercel environment. The R2 bucke
 uses the AWS S3 client to read and write it, but the current adapter configures Cloudflare R2
 directly. Vercel Blob is not part of this architecture.
 
-P0 includes schemas, migrations, provider adapters, signing code, and tests for later releases.
-That code does not create a public product API. There are no released routes for pairing a
-connector, publishing a document, serving a public page, issuing an API key, or operating on Anytype
-data.
+P0 also contains protocol schemas, migrations, provider adapters, signing code, and tests used by
+later releases. Those foundations do not expose a product API. Knot Cloud has no released route for
+pairing a connector, publishing a document, serving a public page, issuing an API key, or operating
+on Anytype data.
 
 ## Current request paths
 
@@ -38,12 +38,12 @@ flowchart LR
 ```
 
 The Vercel build runs a provider preflight against Neon and R2. It confirms that the application
-credential uses the restricted database role and that a private R2 object can complete a
-write-read-delete round trip. No released request path stores user publications in R2 yet.
+credential uses the restricted database role. It also completes a private R2 write, read, and delete
+round trip. No released request path stores a user publication in R2.
 
 ## Planned connector and publication paths
 
-The next releases add two paths. Both depend on Postgres for correctness.
+Planned releases add connector and publication paths. Both use Postgres as their source of truth.
 
 ```mermaid
 flowchart LR
@@ -58,16 +58,16 @@ flowchart LR
   Content --> R2
 ```
 
-The connector generates and keeps its Ed25519 private key locally. Knot Cloud stores the public key
-and accepts only signed requests for that connector. A request nonce must be claimed before a
+The connector generates an Ed25519 key and keeps the private key locally. Knot Cloud stores the
+public key and accepts only signed connector requests. A request must claim a nonce before a
 mutation proceeds. Postgres stores commands, attempts, leases, publication pointers, tombstones,
-and the deletion outbox. A queue or scheduled job may wake work, but neither may become the source
-of truth.
+and the deletion outbox. Queues and scheduled jobs may start work, but they cannot hold the only
+copy of authoritative state.
 
-Publication bytes remain private in R2. The public renderer will read only the version referenced by
-the active Postgres publication pointer. Disable and unpublish first change database state so every
-service-controlled reader and asset route returns 404. The deletion worker then removes the R2
-objects and records completion in the outbox.
+Publication bytes will remain private in R2. The public renderer will read only the version named by
+the active Postgres publication pointer. Disable and unpublish will first change database state so
+every service-controlled reader and asset route returns 404. A deletion worker will then remove the
+R2 objects and record completion in the outbox.
 
 ## Public-content domain gate
 
@@ -81,10 +81,10 @@ the renderer passes its CSP and cross-origin browser tests.
 
 ## Self-hosting boundary
 
-The standalone Next.js image and provider ports support a self-hosted deployment. The repository
-currently ships adapters for Neon, Cloudflare R2, and Upstash. Only the R2 object-store adapter is
-implemented, and it uses R2-specific endpoint configuration through the S3 protocol. A general
-S3-compatible adapter and another replay-store adapter remain unreleased work.
+The standalone Next.js image supports self-hosting. The repository has provider boundaries for
+Neon, Cloudflare R2, and Upstash. Only the R2 object-store adapter is implemented. It uses
+R2-specific endpoint configuration through the S3 protocol. A general S3-compatible adapter and a
+second replay-store adapter remain planned.
 
 Self-hosters must preserve the same trust boundaries. The runtime database role cannot own tables
 or bypass row-level security. Object storage stays private. Public content uses a different

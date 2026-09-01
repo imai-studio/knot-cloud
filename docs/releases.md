@@ -1,6 +1,6 @@
 # Release record
 
-This file records behavior that users can rely on. Plans belong in
+This file is the release contract. Plans belong in
 [`implementation-roadmap.md`](implementation-roadmap.md).
 
 ## 2026-09-01. P0 foundation
@@ -32,7 +32,7 @@ This file records behavior that users can rely on. Plans belong in
 - A local connector configured to use Knot Cloud.
 - Upstash replay storage, queue workers, scheduled reconciliation, or hosted connectors.
 
-### Open release blocker
+### Release blocker
 
 - Public reader content needs a separate registrable domain. The domain has not been chosen, so no
   public-content route may ship.

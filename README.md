@@ -1,52 +1,60 @@
 # Knot Cloud
 
-Knot Cloud is the remote control and publishing service under construction for local Knot
-installations. The imai-operated P0 deployment runs on Vercel with Neon, private Cloudflare R2, and
-Resend. The same Next.js application builds as a standalone container for self-hosting.
+Knot Cloud is the remote service for local [Knot](https://github.com/imai-studio/knot)
+installations. It will coordinate connectors, publish selected Anytype content, and expose a typed
+Anytype data API. Local Knot remains the authority for access to Anytype and the operator's machine.
 
-> **Implementation status:** the P0 foundation and invitation-only operator console are deployed.
-> Connector pairing, public publishing, consumer API keys, and the Anytype data API are not
-> released. The health and protocol metadata endpoints are diagnostic endpoints, not a usable data
-> API.
+## Release status
 
-## P0 contents
+The imai-operated P0 foundation is deployed at [knot.imai.tech](https://knot.imai.tech). It provides
+an invitation-only operator console, `GET /api/health`, and `GET /api/v1/meta`. The application also
+builds as a standalone container for self-hosting.
 
-- a provider-neutral, versioned protocol package;
-- typed publication and Anytype operation schemas;
-- canonical Ed25519 request signing and replay-safe request metadata;
-- command and lease contracts;
-- a Next.js App Router service skeleton for Vercel and standalone containers;
-- an invitation-only, passwordless operator console with isolated auth tables and a restricted
-  database runtime role;
-- lazy Neon, private Cloudflare R2, and Upstash adapters behind explicit provider factories;
-- a tenant-scoped PostgreSQL schema with composite foreign keys, forced row-level security, and a
-  restricted runtime role;
-- threat-model and P0 exit documentation;
-- protocol and adversarial tests.
+The following features are not released:
 
-## Development
+- connector pairing and command delivery;
+- publication upload and public reader pages;
+- consumer API keys and the Anytype data API;
+- a local connector configured to use Knot Cloud.
+
+The health and metadata endpoints are diagnostic. They do not provide an Anytype data API. See
+[`docs/releases.md`](docs/releases.md) for the release contract and
+[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for planned work.
+
+## Architecture
+
+The deployed application uses:
+
+| Service         | Provider      | Purpose                                      |
+| --------------- | ------------- | -------------------------------------------- |
+| Web application | Vercel        | Operator console and diagnostic endpoints    |
+| PostgreSQL      | Neon          | Authentication and tenant-scoped state       |
+| Object storage  | Cloudflare R2 | Private object storage and deployment checks |
+| Email           | Resend        | Passwordless sign-in links                   |
+
+The application accesses R2 through the AWS S3 client. It does not use Vercel Blob. The current
+adapter is specific to Cloudflare R2. A general S3-compatible adapter remains planned.
+
+Public reader pages need a separate registrable domain from the operator console. No domain has
+been selected, so public publishing remains blocked. `CONTENT_BASE_URL` is a configuration
+boundary, not an approved production content domain.
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for request paths and trust boundaries.
+
+## Local development
 
 Requirements: Node.js 24 or newer and pnpm 11.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run check
 pnpm run dev
 ```
 
-The operator console is available at `https://knot.imai.tech` and uses invitation-only email magic
-links. `https://knot.imai.studio` remains a trusted compatibility origin. The metadata endpoint is
-`GET /api/v1/meta`; liveness is `GET /api/health`.
+The operator console uses invitation-only email links. `https://knot.imai.studio` remains a trusted
+compatibility origin for the imai deployment.
 
-The imai deployment uses Neon, a private Cloudflare R2 bucket, and a domain-restricted Resend
-sending key. Knot accesses R2 with the AWS S3 client. It does not use Vercel Blob. The current
-object-store adapter is R2-specific even though R2 implements the S3 protocol. A general
-S3-compatible adapter for self-hosters remains planned. Upstash is not provisioned because no
-released signed mutation route needs replay storage yet.
-
-The public-content hostname is unresolved. Hosted reader pages must use a separate registrable
-domain from the operator console before publishing can ship. `CONTENT_BASE_URL` is a configuration
-boundary, not an approved production content domain.
+## Configuration
 
 The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `KNOT_ALLOWED_EMAILS`, and
 `RESEND_API_KEY`. Set `AUTH_TRUSTED_ORIGINS` to a comma-separated list when the same deployment is
@@ -54,22 +62,31 @@ served from additional domains. `KNOT_ALLOWED_EMAILS` is a comma-separated opera
 removing an address revokes its dashboard access on the next request. Keep the Resend key
 sending-only and restrict it to the configured sender domain. Never commit any of these values.
 
-Run `pnpm --filter @imai/knot-cloud migrate` from a trusted checkout using the owner credential in a
-shell-local `MIGRATION_DATABASE_URL`; never deploy that variable to Vercel or an application
-container. The application `DATABASE_URL` must authenticate directly as the restricted `knot_app`
-role. Self-hosters may run the Dockerfile's dedicated `migrator` target with the owner credential
-and the `runner` target with only the restricted runtime credential.
+Apply migrations from a trusted checkout:
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md),
-[`docs/threat-model.md`](docs/threat-model.md),
-[`docs/database-provisioning.md`](docs/database-provisioning.md),
-[`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md), and
-[`docs/p0-verification.md`](docs/p0-verification.md) for the current security boundary and evidence.
+```bash
+pnpm --filter @imai/knot-cloud migrate
+```
 
-[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) lists the dependency order for
-unreleased work. [`docs/releases.md`](docs/releases.md) is the source of truth for shipped behavior.
+Set `MIGRATION_DATABASE_URL` only in the operator shell or dedicated `migrator` container. Never
+deploy it to Vercel or the application container. `DATABASE_URL` must authenticate directly as the
+restricted `knot_app` role. See
+[`docs/database-provisioning.md`](docs/database-provisioning.md) for the credential boundary.
+
+## Documentation
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): deployed and planned request paths.
+- [`docs/threat-model.md`](docs/threat-model.md): assets, trust boundaries, threats, and controls.
+- [`docs/database-provisioning.md`](docs/database-provisioning.md): migration and runtime database
+  credentials.
+- [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
+- [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
+- [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned
+  work.
+- [`docs/releases.md`](docs/releases.md): released behavior.
 
 ## Repositories
 
-- `imai-studio/knot`: local Anytype Gateway and agent runtime connector.
-- `imai-studio/knot-cloud`: this control and publishing plane.
+- [`imai-studio/knot`](https://github.com/imai-studio/knot): local Anytype gateway and agent runtime
+  connector.
+- [`imai-studio/knot-cloud`](https://github.com/imai-studio/knot-cloud): this remote service.
