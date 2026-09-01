@@ -19,18 +19,18 @@ interface ReviewRow {
   connector_name: string;
   public_key: Uint8Array;
   protocol_version: string;
-  requested_scopes: string[];
-  requested_site_ids: string[];
-  requested_slug_grants: string[];
+  requested_scopes: unknown;
+  requested_site_ids: unknown;
+  requested_slug_grants: unknown;
   status: PairingReview["status"];
   expires_at: Date;
   created_at: Date;
   approved_at: Date | null;
   denied_at: Date | null;
   poll_consumed_at: Date | null;
-  granted_scopes: string[] | null;
-  granted_site_ids: string[] | null;
-  granted_slug_grants: string[] | null;
+  granted_scopes: unknown;
+  granted_site_ids: unknown;
+  granted_slug_grants: unknown;
 }
 
 interface SiteRow {
@@ -44,9 +44,9 @@ interface ConnectorRow {
   name: string;
   public_key: Uint8Array;
   protocol_version: string;
-  scopes: string[];
-  site_ids: string[];
-  slug_grants: string[];
+  scopes: unknown;
+  site_ids: unknown;
+  slug_grants: unknown;
   revoked_at: Date | null;
   last_seen_at: Date | null;
   created_at: Date;
@@ -58,10 +58,24 @@ interface PollRow {
   expires_at: Date;
   connector_id: string | null;
   tenant_id: string | null;
-  granted_scopes: string[] | null;
-  granted_site_ids: string[] | null;
-  granted_slug_grants: string[] | null;
+  granted_scopes: unknown;
+  granted_site_ids: unknown;
+  granted_slug_grants: unknown;
   approved_at: Date | null;
+}
+
+function requiredTextArray(value: unknown, column: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === "string")
+  ) {
+    throw new TypeError(`${column} must be returned as a text array`);
+  }
+  return value;
+}
+
+function optionalTextArray(value: unknown, column: string): string[] {
+  return value === null ? [] : requiredTextArray(value, column);
 }
 
 export class NeonPairingRepository implements PairingRepository {
@@ -117,13 +131,17 @@ export class NeonPairingRepository implements PairingRepository {
       `,
       transaction`
         SELECT id, connector_name, public_key, protocol_version,
-          requested_scopes, requested_site_ids, requested_slug_grants,
+          requested_scopes::text[] AS requested_scopes,
+          requested_site_ids::text[] AS requested_site_ids,
+          requested_slug_grants::text[] AS requested_slug_grants,
           CASE
             WHEN state = 'pending' AND expires_at <= ${now} THEN 'expired'
             ELSE state::text
           END AS status,
           expires_at, created_at, approved_at, denied_at, poll_consumed_at,
-          granted_scopes, granted_site_ids, granted_slug_grants
+          granted_scopes::text[] AS granted_scopes,
+          granted_site_ids::text[] AS granted_site_ids,
+          granted_slug_grants::text[] AS granted_slug_grants
         FROM pairing_sessions
         WHERE tenant_id = ${tenantId}::uuid
         ORDER BY created_at DESC
@@ -135,18 +153,36 @@ export class NeonPairingRepository implements PairingRepository {
       connectorName: row.connector_name,
       publicKey: Buffer.from(row.public_key).toString("base64url"),
       protocolVersion: row.protocol_version,
-      requestedScopes: row.requested_scopes,
-      requestedSiteIds: row.requested_site_ids,
-      requestedSlugGrants: row.requested_slug_grants,
+      requestedScopes: requiredTextArray(
+        row.requested_scopes,
+        "pairing requested scopes",
+      ),
+      requestedSiteIds: requiredTextArray(
+        row.requested_site_ids,
+        "pairing requested site IDs",
+      ),
+      requestedSlugGrants: requiredTextArray(
+        row.requested_slug_grants,
+        "pairing requested slug grants",
+      ),
       status: row.status,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
       approvedAt: row.approved_at,
       deniedAt: row.denied_at,
       pollConsumedAt: row.poll_consumed_at,
-      grantedScopes: row.granted_scopes ?? [],
-      grantedSiteIds: row.granted_site_ids ?? [],
-      grantedSlugGrants: row.granted_slug_grants ?? [],
+      grantedScopes: optionalTextArray(
+        row.granted_scopes,
+        "pairing granted scopes",
+      ),
+      grantedSiteIds: optionalTextArray(
+        row.granted_site_ids,
+        "pairing granted site IDs",
+      ),
+      grantedSlugGrants: optionalTextArray(
+        row.granted_slug_grants,
+        "pairing granted slug grants",
+      ),
     }));
   }
 
@@ -216,7 +252,11 @@ export class NeonPairingRepository implements PairingRepository {
   async poll(input: { pairingId: string; pollTokenDigest: string; now: Date }) {
     await ensureRuntimeDatabaseRole();
     const rows = await getSql().query(
-      `SELECT * FROM poll_pairing_session($1::uuid, $2::text, $3::timestamptz)`,
+      `SELECT pairing_id, status, expires_at, connector_id, tenant_id,
+        granted_scopes::text[] AS granted_scopes,
+        granted_site_ids::text[] AS granted_site_ids,
+        granted_slug_grants::text[] AS granted_slug_grants, approved_at
+      FROM poll_pairing_session($1::uuid, $2::text, $3::timestamptz)`,
       [input.pairingId, input.pollTokenDigest, input.now],
     );
     const row = rows[0] as PollRow | undefined;
@@ -238,9 +278,18 @@ export class NeonPairingRepository implements PairingRepository {
         connectorId: row.connector_id,
         tenantId: row.tenant_id,
         grant: {
-          scopes: row.granted_scopes,
-          siteIds: row.granted_site_ids,
-          slugGrants: row.granted_slug_grants,
+          scopes: requiredTextArray(
+            row.granted_scopes,
+            "pairing granted scopes",
+          ),
+          siteIds: requiredTextArray(
+            row.granted_site_ids,
+            "pairing granted site IDs",
+          ),
+          slugGrants: requiredTextArray(
+            row.granted_slug_grants,
+            "pairing granted slug grants",
+          ),
         },
         approvedAt: Math.floor((row.approved_at as Date).getTime() / 1_000),
       });
@@ -252,7 +301,7 @@ export class NeonPairingRepository implements PairingRepository {
     const [rows = []] = await withTenant(tenantId, (transaction) => [
       transaction`
         SELECT connector.id, connector.name, connector.public_key,
-          connector.protocol_version, connector.scopes,
+          connector.protocol_version, connector.scopes::text[] AS scopes,
           connector.revoked_at, connector.last_seen_at, connector.created_at,
           ARRAY(
             SELECT site_id::text FROM connector_site_grants
@@ -274,9 +323,9 @@ export class NeonPairingRepository implements PairingRepository {
       name: row.name,
       publicKey: Buffer.from(row.public_key).toString("base64url"),
       protocolVersion: row.protocol_version,
-      scopes: row.scopes,
-      siteIds: row.site_ids,
-      slugGrants: row.slug_grants,
+      scopes: requiredTextArray(row.scopes, "connector scopes"),
+      siteIds: requiredTextArray(row.site_ids, "connector site IDs"),
+      slugGrants: requiredTextArray(row.slug_grants, "connector slug grants"),
       revokedAt: row.revoked_at,
       lastSeenAt: row.last_seen_at,
       createdAt: row.created_at,
