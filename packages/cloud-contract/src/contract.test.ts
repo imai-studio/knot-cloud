@@ -6,6 +6,7 @@ import { anytypeOperationRequestSchema } from "./anytype-operation.js";
 import { canonicalJson, sha256Hex } from "./canonical-json.js";
 import { commandEnvelopeSchema } from "./command.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
+import { pairingGrantSchema, pairingSessionPollSchema } from "./pairing.js";
 import { protocolVersion } from "./protocol.js";
 import {
   canonicalSignedRequest,
@@ -204,5 +205,27 @@ describe("typed remote operations", () => {
         },
       }),
     ).toThrow();
+  });
+});
+
+describe("pairing identifiers", () => {
+  it("requires UUID pairing IDs and unique site grants", () => {
+    expect(() =>
+      pairingSessionPollSchema.parse({
+        protocolVersion,
+        pairingId: "not-a-uuid",
+        pollToken: "a".repeat(43),
+      }),
+    ).toThrow();
+    expect(() =>
+      pairingGrantSchema.parse({
+        scopes: ["anytype.objects.read"],
+        siteIds: [
+          "00000000-0000-4000-8000-000000000031",
+          "00000000-0000-4000-8000-000000000031",
+        ],
+        slugGrants: [],
+      }),
+    ).toThrow(/unique/u);
   });
 });

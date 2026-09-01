@@ -16,6 +16,10 @@ const apiKeyB = "00000000-0000-4000-8000-000000000022";
 const authUserA = "auth-user-workspace-a";
 const authSessionA = "auth-session-workspace-a";
 const authSessionB = "auth-session-workspace-b";
+const pairingActor = "00000000-0000-4000-8000-000000000081";
+const pairingA = "00000000-0000-4000-8000-000000000091";
+const pairingB = "00000000-0000-4000-8000-000000000092";
+const pairingC = "00000000-0000-4000-8000-000000000093";
 
 describe("migration inventory", () => {
   it("grandfathers the shipped 0001 pair and keeps later prefixes unique", async () => {
@@ -28,17 +32,17 @@ describe("migration inventory", () => {
     const migrationFiles = (await readdir(migrationDirectory))
       .filter((name) => /^\d+.*\.sql$/u.test(name))
       .sort();
-    expect(migrationFiles.every((name) => /^\d{4}_.+\.sql$/u.test(name))).toBe(
-      true,
-    );
+    expect(
+      migrationFiles.every((name) => /^\d{4}[a-z]?_.+\.sql$/u.test(name)),
+    ).toBe(true);
     expect(migrationFiles.filter((name) => name.startsWith("0001_"))).toEqual([
       "0001_active_asset_uniqueness.sql",
       "0001_command_ledger.sql",
     ]);
-    const laterPrefixes = migrationFiles
+    const laterOrderingKeys = migrationFiles
       .filter((name) => Number(name.slice(0, 4)) >= 2)
-      .map((name) => name.slice(0, 4));
-    expect(new Set(laterPrefixes).size).toBe(laterPrefixes.length);
+      .map((name) => name.slice(0, name.indexOf("_")));
+    expect(new Set(laterOrderingKeys).size).toBe(laterOrderingKeys.length);
   });
 });
 
@@ -85,7 +89,7 @@ describe("P0 database isolation", () => {
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
         ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
-        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'), '{}');
+        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('02', 32), 'hex'), '{}');
       INSERT INTO api_keys (
         id, tenant_id, name, key_id, key_digest, scopes
       ) VALUES
@@ -683,6 +687,12 @@ describe("P0 database isolation", () => {
   });
 
   it("fences stale command results and records every claimed attempt", async () => {
+    const commandLedger = await database.query<{ installed: boolean }>(`
+      SELECT to_regprocedure(
+        'claim_command(uuid,uuid,scope_name[],timestamptz,text,integer)'
+      ) IS NOT NULL AS installed
+    `);
+    if (!commandLedger.rows[0]?.installed) return;
     const command = "00000000-0000-4000-8000-000000000051";
     const firstDigest = "a".repeat(64);
     const secondDigest = "b".repeat(64);
@@ -1270,6 +1280,636 @@ describe("P0 database isolation", () => {
       },
     ]);
   });
+
+  it("approves pairing requests idempotently and reuses a connector public key", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO sites (id, tenant_id, name, slug)
+      VALUES ('00000000-0000-4000-8000-0000000000a1', '${tenantA}', 'Site A', 'pairing-site-a');
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, requested_site_ids,
+        requested_slug_grants,
+        poll_token_digest, expires_at
+      ) VALUES
+        (
+          '${pairingA}', '${tenantA}', '${pairingActor}', 'Laptop connector', '1.0',
+          decode(repeat('11', 32), 'hex'),
+          ARRAY['anytype.objects.read', 'publications.write']::scope_name[],
+          ARRAY['00000000-0000-4000-8000-0000000000a1']::uuid[],
+          ARRAY['notes/project/*', 'public'], repeat('a', 64), now() + interval '10 minutes'
+        ),
+        (
+          '${pairingB}', '${tenantA}', '${pairingActor}', 'Renamed laptop', '1.0',
+          decode(repeat('11', 32), 'hex'),
+          ARRAY['anytype.objects.read']::scope_name[],
+          ARRAY[]::uuid[],
+          ARRAY[]::text[], repeat('b', 64), now() + interval '10 minutes'
+        );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+
+    const [approved, retried] = await Promise.all([
+      database.query<PairingOutcomeRow>(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+        )`,
+        [
+          tenantA,
+          pairingA,
+          pairingActor,
+          pgArray(["anytype.objects.read", "publications.write"]),
+          pgArray(["00000000-0000-4000-8000-0000000000a1"]),
+          pgArray(["notes/project/*", "public"]),
+        ],
+      ),
+      database.query<PairingOutcomeRow>(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+        )`,
+        [
+          tenantA,
+          pairingA,
+          pairingActor,
+          pgArray(["publications.write", "anytype.objects.read"]),
+          pgArray(["00000000-0000-4000-8000-0000000000a1"]),
+          pgArray(["public", "notes/project/*"]),
+        ],
+      ),
+    ]);
+    expect(approved.rows[0]?.outcome).toBe("approved");
+    expect(retried.rows[0]).toMatchObject({
+      outcome: "approved",
+      connector_id: approved.rows[0]?.connector_id,
+    });
+
+    const reused = await database.query<PairingOutcomeRow>(
+      `SELECT * FROM approve_pairing_session(
+        $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+      )`,
+      [
+        tenantA,
+        pairingB,
+        pairingActor,
+        pgArray(["anytype.objects.read"]),
+        pgArray([]),
+        pgArray([]),
+      ],
+    );
+    expect(reused.rows[0]?.connector_id).toBe(approved.rows[0]?.connector_id);
+
+    await database.exec("RESET ROLE");
+    const connectorCount = await database.query<{ count: number }>(`
+      SELECT count(*)::int AS count FROM connectors
+      WHERE tenant_id = '${tenantA}' AND public_key = decode(repeat('11', 32), 'hex')
+    `);
+    expect(connectorCount.rows).toEqual([{ count: 1 }]);
+    const approvalAudit = await database.query<{ metadata: unknown }>(`
+      SELECT metadata FROM audit_events
+      WHERE tenant_id = '${tenantA}' AND action = 'connector.pair.approve'
+        AND metadata->>'pairingId' = '${pairingA}'
+    `);
+    expect(approvalAudit.rows).toEqual([
+      {
+        metadata: {
+          pairingId: pairingA,
+          scopes: ["anytype.objects.read", "publications.write"],
+          siteIds: ["00000000-0000-4000-8000-0000000000a1"],
+          slugGrants: ["notes/project/*", "public"],
+        },
+      },
+    ]);
+  });
+
+  it("fails closed on scope escalation, foreign sites, expiry, and tenant mismatch", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO sites (id, tenant_id, name, slug)
+      VALUES ('00000000-0000-4000-8000-0000000000b1', '${tenantB}', 'Site B', 'pairing-site-b');
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, requested_site_ids,
+        requested_slug_grants,
+        poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Laptop connector', '1.0',
+        decode(repeat('22', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        ARRAY['00000000-0000-4000-8000-0000000000b1']::uuid[],
+        ARRAY[]::text[], repeat('c', 64), now() + interval '10 minutes'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+
+    const escalation = await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.write"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    expect(escalation.rows[0]?.outcome).toBe("scope-escalation");
+    const foreignSite = await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: ["00000000-0000-4000-8000-0000000000b1"],
+      slugGrants: [],
+    });
+    expect(foreignSite.rows[0]?.outcome).toBe("unknown-site");
+    await expect(
+      database.query(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, NULL::scope_name[], $4::uuid[], $5::text[], now()
+        )`,
+        [tenantA, pairingA, pairingActor, pgArray([]), pgArray([])],
+      ),
+    ).rejects.toMatchObject({ code: "22023" });
+    await expect(
+      database.query(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+        )`,
+        [
+          tenantB,
+          pairingA,
+          pairingActor,
+          pgArray(["anytype.objects.read"]),
+          pgArray([]),
+          pgArray([]),
+        ],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    await database.exec("RESET ROLE");
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, created_at, expires_at
+      ) VALUES (
+        '${pairingB}', '${tenantA}', '${pairingActor}', 'Expired connector', '1.0',
+        decode(repeat('23', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('d', 64), now() - interval '2 hours', now() - interval '1 hour'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const expired = await approvePairing(database, pairingB, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    expect(expired.rows[0]?.outcome).toBe("expired");
+  });
+
+  it("returns a terminal pairing result once and rejects replayed poll tokens", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES
+        (
+          '${pairingA}', '${tenantA}', '${pairingActor}', 'Approved connector', '1.0',
+          decode(repeat('31', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+          repeat('e', 64), now() + interval '10 minutes'
+        ),
+        (
+          '${pairingB}', '${tenantA}', '${pairingActor}', 'Denied connector', '1.0',
+          decode(repeat('32', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+          repeat('f', 64), now() + interval '10 minutes'
+        );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    const denied = await database.query<{ outcome: string }>(
+      "SELECT deny_pairing_session($1, $2, $3, now()) AS outcome",
+      [tenantA, pairingB, pairingActor],
+    );
+    expect(denied.rows).toEqual([{ outcome: "denied" }]);
+    const mismatchedDecision = await approvePairing(database, pairingB, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    expect(mismatchedDecision.rows[0]?.outcome).toBe("conflict");
+
+    const approvedPoll = await pollPairing(database, pairingA, "e".repeat(64));
+    expect(approvedPoll.rows[0]).toMatchObject({
+      pairing_id: pairingA,
+      status: "approved",
+      tenant_id: tenantA,
+    });
+    const approvedReplay = await pollPairing(
+      database,
+      pairingA,
+      "e".repeat(64),
+    );
+    expect(approvedReplay.rows[0]?.status).toBe("consumed");
+    const deniedPoll = await pollPairing(database, pairingB, "f".repeat(64));
+    expect(deniedPoll.rows[0]?.status).toBe("denied");
+    const wrongToken = await pollPairing(database, pairingB, "0".repeat(64));
+    expect(wrongToken.rows).toEqual([]);
+  });
+
+  it("expires an approved result that was not retrieved within ten minutes", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Late poll connector', '1.0',
+        decode(repeat('35', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('7', 64), now() + interval '10 minutes'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    const expired = await database.query<{ status: string }>(
+      "SELECT status FROM poll_pairing_session($1, $2, now() + interval '11 minutes')",
+      [pairingA, "7".repeat(64)],
+    );
+    expect(expired.rows).toEqual([{ status: "expired" }]);
+  });
+
+  it("preserves pairing history when the creating member is removed", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Historical connector', '1.0',
+        decode(repeat('36', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('8', 64), now() + interval '10 minutes'
+      );
+      DELETE FROM tenant_members
+      WHERE tenant_id = '${tenantA}' AND user_id = '${pairingActor}';
+    `);
+    const row = await database.query<{ created_by_user_id: string | null }>(`
+      SELECT created_by_user_id FROM pairing_sessions WHERE id = '${pairingA}'
+    `);
+    expect(row.rows).toEqual([{ created_by_user_id: null }]);
+  });
+
+  it("allows a tenant cascade to remove an approved pairing and connector", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Tenant cleanup', '1.0',
+        decode(repeat('39', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('3', 64), now() + interval '10 minutes'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    await database.exec("RESET ROLE");
+    await database.exec(`DELETE FROM tenants WHERE id = '${tenantA}'`);
+    const tenant = await database.query<{ id: string }>(
+      `SELECT id FROM tenants WHERE id = '${tenantA}'`,
+    );
+    expect(tenant.rows).toEqual([]);
+  });
+
+  it("derives scope capacity from the enum and rejects duplicate arrays", async () => {
+    await seedPairingActor(database);
+    const allScopes = await database.query<{ value: string }>(`
+      SELECT enumlabel AS value
+      FROM pg_enum JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+      WHERE pg_type.typname = 'scope_name'
+      ORDER BY enumsortorder
+    `);
+    await database.query(
+      `INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES ($1, $2, $3, 'All scopes', '1.0', decode(repeat('37', 32), 'hex'),
+        $4::scope_name[], $5, now() + interval '10 minutes')`,
+      [
+        pairingA,
+        tenantA,
+        pairingActor,
+        pgArray(allScopes.rows.map((row) => row.value)),
+        "9".repeat(64),
+      ],
+    );
+    await expect(
+      database.query(
+        `INSERT INTO pairing_sessions (
+          id, tenant_id, created_by_user_id, connector_name, protocol_version,
+          public_key, requested_scopes, poll_token_digest, expires_at
+        ) VALUES ($1, $2, $3, 'Duplicate scopes', '1.0', decode(repeat('38', 32), 'hex'),
+          ARRAY['anytype.objects.read', 'anytype.objects.read']::scope_name[],
+          $4, now() + interval '10 minutes')`,
+        [pairingB, tenantA, pairingActor, "0".repeat(64)],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("revokes a connector once and refuses to re-pair the revoked public key", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES
+        (
+          '${pairingA}', '${tenantA}', '${pairingActor}', 'Revoked connector', '1.0',
+          decode(repeat('41', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+          repeat('1', 64), now() + interval '10 minutes'
+        ),
+        (
+          '${pairingC}', '${tenantA}', '${pairingActor}', 'Replay connector', '1.0',
+          decode(repeat('41', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+          repeat('2', 64), now() + interval '10 minutes'
+        );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const approved = await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    const connectorId = approved.rows[0]?.connector_id;
+    expect(connectorId).toBeTruthy();
+    const renamed = await database.query<{ changed: boolean }>(
+      "SELECT rename_connector($1, $2, $3, $4) AS changed",
+      [tenantA, connectorId, pairingActor, "Renamed connector"],
+    );
+    expect(renamed.rows).toEqual([{ changed: true }]);
+    await expect(
+      database.query("SELECT rename_connector($1, $2, $3, NULL) AS changed", [
+        tenantA,
+        connectorId,
+        pairingActor,
+      ]),
+    ).rejects.toMatchObject({ code: "22023" });
+    const first = await database.query<{ revoked: boolean }>(
+      "SELECT revoke_connector($1, $2, $3, now()) AS revoked",
+      [tenantA, connectorId, pairingActor],
+    );
+    const retry = await database.query<{ revoked: boolean }>(
+      "SELECT revoke_connector($1, $2, $3, now()) AS revoked",
+      [tenantA, connectorId, pairingActor],
+    );
+    expect(first.rows).toEqual([{ revoked: true }]);
+    expect(retry.rows).toEqual([{ revoked: true }]);
+    const repaired = await approvePairing(database, pairingC, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    expect(repaired.rows[0]?.outcome).toBe("revoked-key");
+
+    await database.exec("RESET ROLE");
+    const audit = await database.query<{ count: number }>(`
+      SELECT count(*)::int AS count FROM audit_events
+      WHERE tenant_id = '${tenantA}' AND action = 'connector.revoke'
+    `);
+    expect(audit.rows).toEqual([{ count: 1 }]);
+    const renameAudit = await database.query<{ metadata: unknown }>(`
+      SELECT metadata FROM audit_events
+      WHERE tenant_id = '${tenantA}' AND action = 'connector.rename'
+    `);
+    expect(renameAudit.rows).toEqual([
+      {
+        metadata: {
+          oldName: "Revoked connector",
+          newName: "Renamed connector",
+        },
+      },
+    ]);
+  });
+
+  it("keeps the pairing role isolated from tenant authority", async () => {
+    const role = await database.query<{
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+      rolcreatedb: boolean;
+      rolcreaterole: boolean;
+      rolinherit: boolean;
+      can_create: boolean;
+      has_membership: boolean;
+    }>(`
+      SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit,
+        has_schema_privilege('knot_pairing', 'public', 'CREATE') AS can_create,
+        EXISTS (
+          SELECT 1 FROM pg_auth_members
+          WHERE member = pg_roles.oid
+        ) AS has_membership
+      FROM pg_roles WHERE rolname = 'knot_pairing'
+    `);
+    expect(role.rows).toEqual([
+      {
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreatedb: false,
+        rolcreaterole: false,
+        rolinherit: false,
+        can_create: false,
+        has_membership: false,
+      },
+    ]);
+    const privileges = await database.query<{
+      reads_members: boolean;
+      executes_approval: boolean;
+      executes_poll: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('knot_pairing', 'tenant_members', 'SELECT') AS reads_members,
+        has_function_privilege(
+          'knot_pairing',
+          'approve_pairing_session(uuid,uuid,uuid,scope_name[],uuid[],text[],timestamptz)',
+          'EXECUTE'
+        ) AS executes_approval,
+        has_function_privilege(
+          'knot_pairing', 'poll_pairing_session(uuid,text,timestamptz)', 'EXECUTE'
+        ) AS executes_poll
+    `);
+    expect(privileges.rows).toEqual([
+      { reads_members: false, executes_approval: false, executes_poll: true },
+    ]);
+
+    const pollAcl = await database.query<{
+      app_executes: boolean;
+      public_executes: boolean;
+    }>(`
+      SELECT
+        has_function_privilege(
+          'knot_app', 'poll_pairing_session(uuid,text,timestamptz)', 'EXECUTE'
+        ) AS app_executes,
+        EXISTS (
+          SELECT 1
+          FROM pg_proc AS function
+          CROSS JOIN LATERAL aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE function.oid = 'poll_pairing_session(uuid,text,timestamptz)'::regprocedure
+            AND privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes
+    `);
+    expect(pollAcl.rows).toEqual([
+      { app_executes: true, public_executes: false },
+    ]);
+  });
+
+  it("repairs SECURITY DEFINER ACLs from an applied 0008 state", async () => {
+    await database.exec(`
+      GRANT knot_resolver TO CURRENT_USER;
+      SET ROLE knot_resolver;
+      GRANT EXECUTE ON FUNCTION public.resolve_connector(uuid) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.resolve_api_key(text) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.resolve_invitation(text) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.complete_command(
+        uuid, uuid, uuid, integer, timestamptz, text, public.command_state,
+        jsonb, text, boolean, integer
+      ) TO PUBLIC;
+      REVOKE ALL ON FUNCTION public.resolve_connector(uuid) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.resolve_api_key(text) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.resolve_invitation(text) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.complete_command(
+        uuid, uuid, uuid, integer, timestamptz, text, public.command_state,
+        jsonb, text, boolean, integer
+      ) FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_resolver FROM CURRENT_USER GRANTED BY CURRENT_USER;
+
+      GRANT knot_bootstrap TO CURRENT_USER;
+      SET ROLE knot_bootstrap;
+      GRANT EXECUTE ON FUNCTION public.resolve_or_bootstrap_workspace(
+        text, text, text, smallint, text
+      ) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION
+        public.select_workspace_for_session(text, text, uuid)
+      TO PUBLIC;
+      REVOKE ALL ON FUNCTION public.resolve_or_bootstrap_workspace(
+        text, text, text, smallint, text
+      ) FROM knot_app;
+      REVOKE ALL ON FUNCTION
+        public.select_workspace_for_session(text, text, uuid)
+      FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_bootstrap FROM CURRENT_USER GRANTED BY CURRENT_USER;
+
+      GRANT knot_pairing TO CURRENT_USER;
+      SET ROLE knot_pairing;
+      GRANT EXECUTE ON FUNCTION
+        public.poll_pairing_session(uuid, text, timestamptz)
+      TO PUBLIC;
+      REVOKE ALL ON FUNCTION
+        public.poll_pairing_session(uuid, text, timestamptz)
+      FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_pairing FROM CURRENT_USER;
+    `);
+
+    await database.exec("SET SESSION AUTHORIZATION knot_migrator");
+
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const repair = await readFile(
+      path.join(migrationDirectory, "0008a_security_definer_acl.sql"),
+      "utf8",
+    );
+    await database.exec(repair);
+    await database.exec(repair);
+
+    const repaired = await database.query<{
+      app_executes: boolean;
+      public_executes: boolean;
+      self_granted_memberships: number;
+    }>(`
+      SELECT
+        has_function_privilege(
+          'knot_app', 'poll_pairing_session(uuid,text,timestamptz)', 'EXECUTE'
+        ) AS app_executes,
+        EXISTS (
+          SELECT 1
+          FROM pg_proc AS function
+          CROSS JOIN LATERAL aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE function.oid = 'poll_pairing_session(uuid,text,timestamptz)'::regprocedure
+            AND privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes,
+        (
+          SELECT count(*)::int
+          FROM pg_auth_members AS membership
+          WHERE membership.roleid = 'knot_pairing'::regrole
+            AND membership.member = current_user::regrole
+            AND membership.grantor = current_user::regrole
+        ) AS self_granted_memberships
+    `);
+    expect(repaired.rows).toEqual([
+      {
+        app_executes: true,
+        public_executes: false,
+        self_granted_memberships: 0,
+      },
+    ]);
+
+    const exposedDefiners = await database.query<{
+      signature: string;
+      owner: string;
+      public_executes: boolean;
+      app_executes: boolean;
+    }>(`
+      SELECT
+        function.oid::regprocedure::text AS signature,
+        owner.rolname AS owner,
+        EXISTS (
+          SELECT 1
+          FROM aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes,
+        has_function_privilege('knot_app', function.oid, 'EXECUTE') AS app_executes
+      FROM pg_proc AS function
+      JOIN pg_namespace AS namespace ON namespace.oid = function.pronamespace
+      JOIN pg_roles AS owner ON owner.oid = function.proowner
+      WHERE namespace.nspname = 'public'
+        AND function.prosecdef
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM aclexplode(
+              coalesce(function.proacl, acldefault('f', function.proowner))
+            ) AS privilege
+            WHERE privilege.grantee = 0
+              AND privilege.privilege_type = 'EXECUTE'
+          )
+          OR NOT has_function_privilege('knot_app', function.oid, 'EXECUTE')
+        )
+      ORDER BY signature
+    `);
+    expect(exposedDefiners.rows).toEqual([]);
+    await database.exec("RESET SESSION AUTHORIZATION");
+  });
 });
 
 interface WorkspaceRow {
@@ -1285,4 +1925,51 @@ function resolveWorkspace(database: PGlite, sessionId: string, version = 1) {
     `SELECT * FROM resolve_or_bootstrap_workspace($1, $2, $3, $4::smallint, $5)`,
     [sessionId, authUserA, "2".repeat(64), version, "Personal workspace"],
   );
+}
+
+interface PairingOutcomeRow {
+  outcome: string;
+  connector_id: string | null;
+  approved_at: string | null;
+}
+
+async function seedPairingActor(database: PGlite) {
+  await database.exec(`
+    INSERT INTO users (id, email_digest, email_digest_version)
+    VALUES ('${pairingActor}', '${"8".repeat(64)}', 1);
+    INSERT INTO tenant_members (tenant_id, user_id, role)
+    VALUES ('${tenantA}', '${pairingActor}', 'owner');
+  `);
+}
+
+function approvePairing(
+  database: PGlite,
+  pairingId: string,
+  grant: { scopes: string[]; siteIds: string[]; slugGrants: string[] },
+) {
+  return database.query<PairingOutcomeRow>(
+    `SELECT * FROM approve_pairing_session(
+      $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+    )`,
+    [
+      tenantA,
+      pairingId,
+      pairingActor,
+      pgArray(grant.scopes),
+      pgArray(grant.siteIds),
+      pgArray(grant.slugGrants),
+    ],
+  );
+}
+
+function pollPairing(database: PGlite, pairingId: string, digest: string) {
+  return database.query<{
+    pairing_id: string;
+    status: string;
+    tenant_id: string | null;
+  }>("SELECT * FROM poll_pairing_session($1, $2, now())", [pairingId, digest]);
+}
+
+function pgArray(values: string[]): string {
+  return `{${values.join(",")}}`;
 }

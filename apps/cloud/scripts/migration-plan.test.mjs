@@ -14,6 +14,19 @@ describe("migration plan", () => {
     ).not.toThrow();
   });
 
+  it("accepts an additive repair that sorts after an applied migration", () => {
+    const repairFiles = [
+      "0008_connector_pairing.sql",
+      "0008a_security_definer_acl.sql",
+      "0009_publication.sql",
+    ];
+    expect(() =>
+      validateMigrationPlan(repairFiles, [
+        { name: "0008_connector_pairing.sql", sha256: "a" },
+      ]),
+    ).not.toThrow();
+  });
+
   it("rejects a pending migration that sorts before an applied migration", () => {
     expect(() =>
       validateMigrationPlan(files, [

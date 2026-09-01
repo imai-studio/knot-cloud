@@ -28,6 +28,17 @@ Later releases add these boundaries:
 Human sessions, connector keys, API keys, and first-party service credentials are not
 interchangeable. No endpoint may accept one credential class as a fallback for another.
 
+The connector-pairing candidate keeps the raw poll token out of database rows and human list
+responses. A pending poll may repeat, but only the first terminal poll returns approval or denial;
+later polls return `consumed`. The poll endpoint rejects browser cookies, authorization headers,
+consumer API keys, and connector headers so those credential classes cannot substitute for the
+one-time token. The connector private key remains local.
+
+The poll route accepts 120 attempts per Vercel client address each minute. Upstash applies the
+counter before Knot Cloud validates a pairing ID. Malformed and unknown IDs receive the same
+response, and callers cannot probe unlimited IDs. Requests without a trusted Vercel address share
+one fallback bucket.
+
 ## Threats and controls
 
 | Threat                                              | Control or release requirement                                                                                                                                                     | Evidence or later gate                                                          |
