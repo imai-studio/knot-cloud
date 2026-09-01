@@ -1,7 +1,7 @@
 # Transactional channel events
 
-Status: implementation candidate on the P2b branch. Do not treat these routes as deployed until the
-release record says so.
+Status: released. Deployment-approved destinations and the local participant authorization step
+remain mandatory.
 
 Knot Cloud can accept one bounded channel-origin pointer and fan it out to named webhook
 destinations. A pointer contains only `spaceId`, `chatId`, and `messageId`. It is not proof of the
@@ -75,6 +75,18 @@ fence, bounded exponential backoff, at most ten attempts, and a terminal dead-le
 maintenance route only drives this durable outbox; it is not another workflow scheduler.
 Neither webhook delivery nor a Cloud session can approve or modify a workflow or satisfy a local
 management-authority check.
+
+The managed scheduler runs once per minute. Each invocation scans at most 100 due tenants, rotates
+the starting point within that set by minute, and allocates ten concurrent delivery slots across at
+most ten tenants. A tenant receives more slots when fewer tenants are due. Each outbound request has
+a ten-second timeout, which keeps the invocation inside the 30-second function budget. The response
+reports `dueTenants`, `tenantScanLimit`, and `scanTruncated`; a truncated scan is an operator signal
+that the deployment needs more worker capacity. Backlogs remain durable in Postgres for later
+invocations.
+
+If due deliveries exist but `WEBHOOK_DESTINATIONS_JSON` has no destinations, maintenance returns
+`503` without claiming them. An empty outbox remains a successful no-op when no destinations are
+configured.
 
 ## Delivery verification
 

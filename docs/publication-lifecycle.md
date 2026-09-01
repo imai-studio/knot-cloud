@@ -1,7 +1,7 @@
 # Publication lifecycle
 
-Status: implemented for review, not released. The reader stays disabled until an operator selects
-and configures a separate registrable content domain.
+Status: released. The managed reader uses `https://pages.imai.studio`. Self-hosted readers stay
+disabled until the operator configures a separate registrable content domain.
 
 ## Data path
 
@@ -27,7 +27,7 @@ content it may read and publish.
 
 ## Visibility and deletion
 
-The candidate reader serves typed pages and current-version media on `CONTENT_BASE_URL` and on a
+The reader serves typed pages and current-version media on `CONTENT_BASE_URL` and on a
 verified custom hostname mapped to the exact site. Console and control-plane API paths return `404`
 on reader hosts, and reader-only paths return `404` on the console origin. See
 [`public-reader.md`](public-reader.md) for the URL shape and deployment checks.
@@ -70,12 +70,12 @@ operational metadata, but it must not retain the deleted document or media.
 - Every repository call sets the tenant transaction context. Cross-tenant identifiers fail under
   forced row-level security and composite foreign keys.
 
-## Release gates
+## Regression checks
 
-Before release:
+Before each production promotion:
 
-- merge and deploy tenant bootstrap, connector pairing, signed connector routes, and durable nonce storage;
+- run the tenant bootstrap, connector pairing, signed connector route, and durable nonce tests;
 - run the managed-Neon two-tenant and lease-fencing tests;
-- run large direct-to-R2 upload and interruption tests against the production candidate;
-- provision a separate reader domain and pass its browser security tests;
+- run direct and presigned R2 upload and interruption tests against production credentials;
+- verify the separate reader domain and its browser security headers;
 - record destructive-unpublish failure injection and immediate not-found evidence.

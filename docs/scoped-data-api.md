@@ -1,7 +1,8 @@
 # Scoped Anytype data API
 
-This guide covers the P4 implementation in this branch. It is not part of the deployed release
-until [`releases.md`](releases.md) records it.
+Status: released. Repository tests cover authentication, scope, quota, idempotency, tenant, and
+operation-status behavior. The current release record does not claim a separate live operation
+submission canary.
 
 ## Credential setup
 

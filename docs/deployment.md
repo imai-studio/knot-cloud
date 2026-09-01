@@ -1,7 +1,7 @@
 # Deployment runbook
 
-This runbook covers the released P0 foundation and the unreleased publication candidate on Vercel
-with Neon and private Cloudflare R2. Release status remains authoritative in `releases.md`.
+This runbook covers the released service on Vercel with Neon, Upstash, and private Cloudflare R2.
+Release status remains authoritative in `releases.md`.
 
 ## Prerequisites
 
@@ -11,8 +11,8 @@ with Neon and private Cloudflare R2. Release status remains authoritative in `re
 - a private Cloudflare R2 bucket and bucket-scoped S3 credentials
 - a Resend sending key restricted to the configured sender domain
 
-Do not provision a public R2 URL. Before enabling the publication candidate, select a separate
-registrable content domain and follow [`public-reader.md`](public-reader.md).
+Do not provision a public R2 URL. Configure a separate registrable content domain and follow
+[`public-reader.md`](public-reader.md).
 
 ## Apply the database migration
 
@@ -31,15 +31,14 @@ Start from [`apps/cloud/.env.example`](../apps/cloud/.env.example). Generate ind
 values for every secret and pepper. Do not copy the example placeholders into production.
 
 Set `CRON_SECRET` to a dedicated random value of at least 32 characters. Vercel sends it as a
-bearer credential to the scheduled publication-maintenance route. Self-hosted schedulers must call
-the same route with `Authorization: Bearer <CRON_SECRET>`. Do not reuse `AUTH_SECRET` or an API-key
-pepper.
+bearer credential to both scheduled maintenance routes. Self-hosted schedulers must call each route
+with `Authorization: Bearer <CRON_SECRET>`. Do not reuse `AUTH_SECRET` or an API-key pepper.
 
 Configure R2 by following [`object-storage.md`](object-storage.md). Keep both public access methods
-disabled on the bucket. Leave `CONTENT_BASE_URL` unset until the isolated reader deployment and
-domain are ready. Reader routes fail closed while it is absent.
+disabled on the bucket. Set `CONTENT_BASE_URL` only after the isolated reader deployment and domain
+are ready. Reader routes fail closed while it is absent.
 
-## Verify the candidate
+## Verify the release
 
 Run all repository checks before deployment:
 
@@ -56,10 +55,10 @@ pnpm --filter @imai/knot-cloud smoke:providers
 
 The smoke test rejects an elevated database runtime role. It also writes, verifies, and removes one
 private tenant-scoped R2 object. Run it against the exact Neon, R2, and rate-limit credentials
-configured for the candidate before promotion.
+configured for the release before promotion.
 
-For publication candidates, also exercise the real presigned-upload path against the candidate R2
-bucket: request a one-byte `application/octet-stream` asset upload from an authorized connector,
+Exercise the real presigned-upload path against the release R2 bucket. Request a one-byte
+`application/octet-stream` asset upload from an authorized connector,
 perform the returned `PUT` with every returned required header, commit the upload, and verify that
 the API reports `verified`. Delete the test publication afterward and drain maintenance. This
 proves that R2 preserved the signed `sha256`, `tenant-id`, `kind`, and `byte-size` metadata; a local
@@ -78,18 +77,19 @@ curl --fail --show-error https://<dashboard-host>/api/health
 curl --fail --show-error https://<dashboard-host>/api/v1/meta
 ```
 
-When publication lifecycle code is part of the candidate, invoke
-`/api/internal/publications/maintenance` once with the cron bearer credential. A successful empty
-pass returns `200`; a `500` indicates a tenant failure or a deletion dead letter and must block
-promotion.
+Invoke both `/api/internal/publications/maintenance` and
+`/api/internal/webhooks/maintenance` once with the cron bearer credential. A successful empty pass
+returns `200`. A `500` indicates that maintenance failed for at least one tenant and must block
+promotion. The publication route also returns `500` when a deletion dead-letters. Webhook
+dead-letter counts are returned in a successful response and must be investigated from the audit
+and delivery records. Vercel runs publication maintenance every ten minutes and webhook maintenance
+every minute. Self-hosted deployments must schedule both routes at those intervals.
 
 Confirm that the R2 smoke object was deleted and that the bucket still has no `r2.dev` URL or custom
-domain. Record the deployment and check results in [`p0-verification.md`](p0-verification.md).
+domain. Record the deployment and check results in [`releases.md`](releases.md).
 
-For a publication candidate, also run the origin-isolation, CSP, cookie, page, media, disable,
-rollback, destructive-unpublish, and deletion-drain checks in
-[`public-reader.md`](public-reader.md). Do not record P3 as released until those checks pass on the
-selected content domain.
+Run the origin-isolation, CSP, cookie, page, media, disable, rollback, destructive-unpublish, and
+deletion-drain checks in [`public-reader.md`](public-reader.md).
 
 ## Managed Neon RLS probe
 

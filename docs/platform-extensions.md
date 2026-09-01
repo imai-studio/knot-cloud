@@ -1,9 +1,8 @@
 # Reader access, domains, and platform limits
 
-This document describes an unreleased P7 implementation candidate. Repository presence does not
-make these capabilities available in production. They enter the release contract only after the
-stacked pull requests merge, migration `0013_platform_extensions.sql` is applied, and the deployed
-checks pass.
+Status: custom domains, reader grants, reader sessions, workspace limits, and audit records are
+released. Hosted connectors, billing, and media transformation execution remain disabled. Their
+tables and provider boundaries do not make those runtimes available.
 
 ## Custom domains
 
@@ -35,10 +34,10 @@ parent grant is also live. Revoking a grant revokes every session created from i
 do not authorize dashboard or data API access.
 
 Authenticated pages, media, redirects, and conditional responses use `private, no-store` plus
-`Vary: Cookie` and explicit no-store headers for shared CDNs. Public digest-addressed media keeps
-the separate must-revalidate policy described in [`public-reader.md`](public-reader.md).
+`Vary: Cookie` and explicit no-store headers for shared CDNs. Public reader responses also use
+`no-store`, as described in [`public-reader.md`](public-reader.md).
 
-The candidate adds these human-session routes:
+The release provides these human-session routes:
 
 | Route                                                             | Purpose                         |
 | ----------------------------------------------------------------- | ------------------------------- |
