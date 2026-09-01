@@ -121,12 +121,35 @@ describe("R2PrivateObjectStore", () => {
       "content-length": "3",
       "content-type": "image/png",
       "if-none-match": "*",
+      "x-amz-meta-byte-size": "3",
+      "x-amz-meta-kind": "asset",
+      "x-amz-meta-sha256": object.sha256,
+      "x-amz-meta-tenant-id": tenantA,
     });
-    expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";")).toEqual(
-      expect.arrayContaining(["content-length", "host", "if-none-match"]),
+    const signedHeaders = new Set(
+      url.searchParams.get("X-Amz-SignedHeaders")?.split(";") ?? [],
     );
-    expect(url.searchParams.get("x-amz-meta-sha256")).toBe(object.sha256);
-    expect(url.searchParams.get("x-amz-meta-tenant-id")).toBe(tenantA);
+    expect([...signedHeaders].sort()).toEqual([
+      "content-length",
+      "host",
+      "if-none-match",
+      "x-amz-meta-byte-size",
+      "x-amz-meta-kind",
+      "x-amz-meta-sha256",
+      "x-amz-meta-tenant-id",
+    ]);
+    const requiredMetadataHeaders = Object.keys(signed.requiredHeaders).filter(
+      (name) => name.startsWith("x-amz-meta-"),
+    );
+    expect(requiredMetadataHeaders.length).toBeGreaterThan(0);
+    expect(
+      requiredMetadataHeaders.every((name) => signedHeaders.has(name)),
+    ).toBe(true);
+    expect(
+      [...url.searchParams.keys()].some((name) =>
+        name.toLowerCase().startsWith("x-amz-meta-"),
+      ),
+    ).toBe(false);
   });
 
   it("derives tenant-scoped keys and rejects caller-controlled path data", () => {

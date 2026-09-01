@@ -25,6 +25,10 @@ function handlers(input?: { scopes?: string[]; connectorId?: string }) {
     requiredHeaders: {
       "content-type": "image/png",
       "if-none-match": "*",
+      "x-amz-meta-byte-size": "100",
+      "x-amz-meta-kind": "asset",
+      "x-amz-meta-sha256": "a".repeat(64),
+      "x-amz-meta-tenant-id": tenantId,
     },
   });
   const service = {
@@ -76,6 +80,14 @@ describe("connector publication HTTP service", () => {
         assetId,
         uploadId,
         method: "PUT",
+        requiredHeaders: {
+          "content-type": "image/png",
+          "if-none-match": "*",
+          "x-amz-meta-byte-size": "100",
+          "x-amz-meta-kind": "asset",
+          "x-amz-meta-sha256": "a".repeat(64),
+          "x-amz-meta-tenant-id": tenantId,
+        },
       },
     );
     expect(service.requestAssetUpload).toHaveBeenCalledWith({

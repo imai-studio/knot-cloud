@@ -9,6 +9,10 @@ import {
 import { neon } from "@neondatabase/serverless";
 import { Redis } from "@upstash/redis";
 
+// Node 24 executes erasable TypeScript directly. Import the production helper
+// so this smoke cannot drift from the upload API's signing behavior.
+import { createPresignedPut } from "../src/lib/adapters/r2-presigned.ts";
+
 const required = [
   "APP_BASE_URL",
   "AUTH_BASE_URL",
@@ -133,6 +137,14 @@ const expected = new TextEncoder().encode("knot-cloud-provider-smoke-test");
 const tenantId = randomUUID();
 const sha256 = createHash("sha256").update(expected).digest("hex");
 const key = `tenants/${tenantId}/assets/${sha256.slice(0, 2)}/${sha256}`;
+const presignedExpected = new TextEncoder().encode(
+  "knot-cloud-presigned-provider-smoke-test",
+);
+const presignedTenantId = randomUUID();
+const presignedSha256 = createHash("sha256")
+  .update(presignedExpected)
+  .digest("hex");
+const presignedKey = `tenants/${presignedTenantId}/assets/${presignedSha256.slice(0, 2)}/${presignedSha256}`;
 const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -146,9 +158,10 @@ const r2 = new S3Client({
   },
 });
 
-let uploaded = false;
+const uploadedKeys = [];
 let operationFailed = false;
 try {
+  uploadedKeys.push(key);
   await r2.send(
     new PutObjectCommand({
       Bucket: bucket,
@@ -167,7 +180,6 @@ try {
       IfNoneMatch: "*",
     }),
   );
-  uploaded = true;
   const stored = await r2.send(
     new GetObjectCommand({
       Bucket: bucket,
@@ -189,16 +201,69 @@ try {
   ) {
     throw new Error("R2 smoke object metadata did not round-trip exactly");
   }
+
+  const presigned = await createPresignedPut({
+    client: r2,
+    bucket,
+    key: presignedKey,
+    contentLength: presignedExpected.byteLength,
+    contentType: "text/plain",
+    cacheControl: "private, no-store, max-age=0",
+    metadata: {
+      "byte-size": String(presignedExpected.byteLength),
+      kind: "asset",
+      sha256: presignedSha256,
+      "tenant-id": presignedTenantId,
+    },
+    expiresInSeconds: 60,
+  });
+  uploadedKeys.push(presignedKey);
+  const upload = await fetch(presigned.uploadUrl, {
+    method: "PUT",
+    headers: presigned.requiredHeaders,
+    body: presignedExpected,
+  });
+  if (!upload.ok) {
+    const detail = (await upload.text()).slice(0, 1_000);
+    throw new Error(
+      `R2 presigned smoke upload failed with ${upload.status}: ${detail}`,
+    );
+  }
+  const presignedStored = await r2.send(
+    new GetObjectCommand({ Bucket: bucket, Key: presignedKey }),
+  );
+  const presignedActual = await presignedStored.Body?.transformToByteArray();
+  if (
+    !presignedActual ||
+    Buffer.compare(
+      Buffer.from(presignedActual),
+      Buffer.from(presignedExpected),
+    ) !== 0 ||
+    presignedStored.Metadata?.["byte-size"] !==
+      String(presignedExpected.byteLength) ||
+    presignedStored.Metadata?.kind !== "asset" ||
+    presignedStored.Metadata?.sha256 !== presignedSha256 ||
+    presignedStored.Metadata?.["tenant-id"] !== presignedTenantId ||
+    presignedStored.ContentType !== "text/plain" ||
+    presignedStored.CacheControl !== "private, no-store, max-age=0"
+  ) {
+    throw new Error(
+      "R2 presigned smoke object or metadata did not round-trip exactly",
+    );
+  }
 } catch (error) {
   operationFailed = true;
   throw error;
 } finally {
   try {
-    if (uploaded) {
+    if (uploadedKeys.length > 0) {
       const deleted = await r2.send(
         new DeleteObjectsCommand({
           Bucket: bucket,
-          Delete: { Quiet: true, Objects: [{ Key: key }] },
+          Delete: {
+            Quiet: true,
+            Objects: uploadedKeys.map((Key) => ({ Key })),
+          },
         }),
       );
       if (deleted.Errors && deleted.Errors.length > 0) {
@@ -214,7 +279,7 @@ try {
 }
 
 console.log(
-  "Neon role, command and durable nonce procedures, Upstash rate limiting, and R2 object round-trip verified.",
+  "Neon role, command and durable nonce procedures, Upstash rate limiting, and direct plus presigned R2 object round-trips verified.",
 );
 
 function hasEnvironmentValue(name) {

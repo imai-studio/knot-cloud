@@ -36,6 +36,12 @@ metadata. The control plane then reads the private object, validates that signed
 calculates its SHA-256 digest, checks its exact length, and only then marks the asset verified. Do
 not add a Function route that buffers an upload before passing it to R2.
 
+The released uploader is the server-side Node connector. It sends every header returned by the
+upload-init response, including the signed `x-amz-meta-*` identity headers, directly to R2. Browser
+uploads are not supported, so the private bucket intentionally has no browser CORS policy. Adding
+a browser uploader requires a separate threat-model and CORS review; do not broaden the bucket's
+allowed origins or headers as a workaround.
+
 Use [`apps/cloud/.env.example`](../apps/cloud/.env.example) for local development. Vercel and
 self-hosted deployments should inject the same values through their secret managers.
 
@@ -109,9 +115,10 @@ Run the adapter and policy tests with:
 pnpm --filter @imai/knot-cloud test
 ```
 
-The production prebuild smoke test writes one tenant-scoped object to the private bucket, checks its
-bytes and metadata, and deletes it. Run it directly only with the restricted database URL and R2
-credentials loaded in the current shell:
+The production prebuild smoke test writes one tenant-scoped object through the SDK and another
+through the same presigned request builder used by the upload API. It sends the returned header map
+unchanged, checks both objects' bytes and metadata, and deletes both keys. Run it directly only with
+the restricted database URL and R2 credentials loaded in the current shell:
 
 ```bash
 pnpm --filter @imai/knot-cloud smoke:providers
