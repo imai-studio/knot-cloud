@@ -20,10 +20,23 @@ interface ReviewRow {
   public_key: Uint8Array;
   protocol_version: string;
   requested_scopes: string[];
+  requested_site_ids: string[];
   requested_slug_grants: string[];
   status: PairingReview["status"];
   expires_at: Date;
   created_at: Date;
+  approved_at: Date | null;
+  denied_at: Date | null;
+  poll_consumed_at: Date | null;
+  granted_scopes: string[] | null;
+  granted_site_ids: string[] | null;
+  granted_slug_grants: string[] | null;
+}
+
+interface SiteRow {
+  id: string;
+  name: string;
+  slug: string;
 }
 
 interface ConnectorRow {
@@ -65,12 +78,14 @@ export class NeonPairingRepository implements PairingRepository {
         WITH created_pairing AS (
           INSERT INTO pairing_sessions (
             tenant_id, created_by_user_id, connector_name, protocol_version,
-            public_key, requested_scopes, requested_slug_grants,
+            public_key, requested_scopes, requested_site_ids,
+            requested_slug_grants,
             poll_token_digest, expires_at
           ) VALUES (
             ${input.tenantId}::uuid, ${input.actorUserId}::uuid,
             ${input.request.connectorName}, ${input.request.protocolVersion},
             ${publicKey}, ${input.request.requestedScopes}::scope_name[],
+            ${input.request.requestedSiteIds}::uuid[],
             ${input.request.requestedSlugGrants}::text[],
             ${input.pollTokenDigest}, ${input.expiresAt}
           ) RETURNING id
@@ -94,15 +109,21 @@ export class NeonPairingRepository implements PairingRepository {
 
   async listReviews(tenantId: string): Promise<PairingReview[]> {
     const now = new Date();
-    const [rows = []] = await withTenant(tenantId, (transaction) => [
+    const [, rows = []] = await withTenant(tenantId, (transaction) => [
+      transaction`
+        DELETE FROM pairing_sessions
+        WHERE tenant_id = ${tenantId}::uuid
+          AND expires_at < ${new Date(now.getTime() - 30 * 24 * 60 * 60 * 1_000)}
+      `,
       transaction`
         SELECT id, connector_name, public_key, protocol_version,
-          requested_scopes, requested_slug_grants,
+          requested_scopes, requested_site_ids, requested_slug_grants,
           CASE
             WHEN state = 'pending' AND expires_at <= ${now} THEN 'expired'
             ELSE state::text
           END AS status,
-          expires_at, created_at
+          expires_at, created_at, approved_at, denied_at, poll_consumed_at,
+          granted_scopes, granted_site_ids, granted_slug_grants
         FROM pairing_sessions
         WHERE tenant_id = ${tenantId}::uuid
         ORDER BY created_at DESC
@@ -115,10 +136,34 @@ export class NeonPairingRepository implements PairingRepository {
       publicKey: Buffer.from(row.public_key).toString("base64url"),
       protocolVersion: row.protocol_version,
       requestedScopes: row.requested_scopes,
+      requestedSiteIds: row.requested_site_ids,
       requestedSlugGrants: row.requested_slug_grants,
       status: row.status,
       expiresAt: row.expires_at,
       createdAt: row.created_at,
+      approvedAt: row.approved_at,
+      deniedAt: row.denied_at,
+      pollConsumedAt: row.poll_consumed_at,
+      grantedScopes: row.granted_scopes ?? [],
+      grantedSiteIds: row.granted_site_ids ?? [],
+      grantedSlugGrants: row.granted_slug_grants ?? [],
+    }));
+  }
+
+  async listSites(tenantId: string) {
+    const [rows = []] = await withTenant(tenantId, (transaction) => [
+      transaction`
+        SELECT id, name, slug
+        FROM sites
+        WHERE tenant_id = ${tenantId}::uuid
+        ORDER BY lower(name), id
+        LIMIT 100
+      `,
+    ]);
+    return (rows as SiteRow[]).map((row) => ({
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
     }));
   }
 

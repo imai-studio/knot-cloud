@@ -85,6 +85,7 @@ function pairingRequest() {
     protocolVersion: "1.0" as const,
     publicKey: "b".repeat(43),
     requestedScopes: ["anytype.objects.read" as const],
+    requestedSiteIds: [],
     requestedSlugGrants: ["notes/project/*"],
   };
 }
@@ -112,6 +113,7 @@ function pairingRepository(): PairingRepository {
     deny: vi.fn(),
     listConnectors: vi.fn(),
     listReviews: vi.fn(),
+    listSites: vi.fn(),
     poll: vi.fn(),
     rename: vi.fn(),
     revoke: vi.fn(),

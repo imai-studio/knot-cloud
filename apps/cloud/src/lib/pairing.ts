@@ -19,10 +19,23 @@ export interface PairingReview {
   publicKey: string;
   protocolVersion: string;
   requestedScopes: string[];
+  requestedSiteIds: string[];
   requestedSlugGrants: string[];
   status: "pending" | "approved" | "denied" | "expired";
   expiresAt: Date;
   createdAt: Date;
+  approvedAt: Date | null;
+  deniedAt: Date | null;
+  pollConsumedAt: Date | null;
+  grantedScopes: string[];
+  grantedSiteIds: string[];
+  grantedSlugGrants: string[];
+}
+
+export interface PairingSite {
+  id: string;
+  name: string;
+  slug: string;
 }
 
 export interface ManagedConnector {
@@ -58,6 +71,7 @@ export interface PairingRepository {
     expiresAt: Date;
   }): Promise<string>;
   listReviews(tenantId: string): Promise<PairingReview[]>;
+  listSites(tenantId: string): Promise<PairingSite[]>;
   approve(input: {
     tenantId: string;
     actorUserId: string;

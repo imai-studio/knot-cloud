@@ -1,11 +1,13 @@
 import { z } from "zod";
 
-import { opaqueIdSchema, unixSecondsSchema } from "./identifiers.js";
+import { unixSecondsSchema } from "./identifiers.js";
 import {
   protocolVersion,
   scopeNameSchema,
   type ScopeName,
 } from "./protocol.js";
+
+const uuidSchema = z.uuid();
 
 export const connectorPublicKeySchema = z
   .string()
@@ -43,12 +45,21 @@ const uniqueSlugGrantsSchema = z
     "Slug grants must be unique",
   );
 
+const uniqueSiteIdsSchema = z
+  .array(uuidSchema)
+  .max(100)
+  .refine(
+    (values) => new Set(values).size === values.length,
+    "Site grants must be unique",
+  );
+
 export const pairingSessionCreateSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
     connectorName: z.string().trim().min(1).max(100),
     publicKey: connectorPublicKeySchema,
     requestedScopes: uniqueScopesSchema,
+    requestedSiteIds: uniqueSiteIdsSchema.default([]),
     requestedSlugGrants: uniqueSlugGrantsSchema.default([]),
   })
   .strict();
@@ -56,7 +67,7 @@ export const pairingSessionCreateSchema = z
 export const pairingSessionCreatedSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    pairingId: opaqueIdSchema,
+    pairingId: uuidSchema,
     pollToken: pairingPollTokenSchema,
     authorizationUrl: z.url().refine((value) => isSecureOrLoopbackUrl(value), {
       message: "Authorization URL must use HTTPS or loopback HTTP",
@@ -69,14 +80,14 @@ export const pairingSessionCreatedSchema = z
 export const pairingSessionPollSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    pairingId: opaqueIdSchema,
+    pairingId: uuidSchema,
     pollToken: pairingPollTokenSchema,
   })
   .strict();
 
 export const pairingGrantSchema = z
   .object({
-    siteIds: z.array(opaqueIdSchema).max(100),
+    siteIds: uniqueSiteIdsSchema,
     scopes: uniqueScopesSchema,
     slugGrants: uniqueSlugGrantsSchema,
   })
@@ -87,7 +98,7 @@ export const pairingSessionStatusSchema = z.discriminatedUnion("status", [
     .object({
       protocolVersion: z.literal(protocolVersion),
       status: z.literal("pending"),
-      pairingId: opaqueIdSchema,
+      pairingId: uuidSchema,
       expiresAt: unixSecondsSchema,
     })
     .strict(),
@@ -95,9 +106,9 @@ export const pairingSessionStatusSchema = z.discriminatedUnion("status", [
     .object({
       protocolVersion: z.literal(protocolVersion),
       status: z.literal("approved"),
-      pairingId: opaqueIdSchema,
-      connectorId: opaqueIdSchema,
-      tenantId: opaqueIdSchema,
+      pairingId: uuidSchema,
+      connectorId: uuidSchema,
+      tenantId: uuidSchema,
       grant: pairingGrantSchema,
       approvedAt: unixSecondsSchema,
     })
@@ -106,7 +117,7 @@ export const pairingSessionStatusSchema = z.discriminatedUnion("status", [
     .object({
       protocolVersion: z.literal(protocolVersion),
       status: z.enum(["denied", "expired", "consumed"]),
-      pairingId: opaqueIdSchema,
+      pairingId: uuidSchema,
     })
     .strict(),
 ]);
@@ -114,7 +125,7 @@ export const pairingSessionStatusSchema = z.discriminatedUnion("status", [
 export const pairingApprovalSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    pairingId: opaqueIdSchema,
+    pairingId: uuidSchema,
     decision: z.literal("approve"),
     grant: pairingGrantSchema,
   })
@@ -123,7 +134,7 @@ export const pairingApprovalSchema = z
 export const pairingDenialSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    pairingId: opaqueIdSchema,
+    pairingId: uuidSchema,
     decision: z.literal("deny"),
   })
   .strict();

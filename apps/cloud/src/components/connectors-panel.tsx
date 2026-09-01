@@ -11,14 +11,22 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-import type { ManagedConnector, PairingReview } from "@/lib/pairing";
+import type {
+  ManagedConnector,
+  PairingReview,
+  PairingSite,
+} from "@/lib/pairing";
 
 interface SerializedPairingReview extends Omit<
   PairingReview,
-  "createdAt" | "expiresAt"
+  "approvedAt" | "createdAt" | "deniedAt" | "expiresAt" | "pollConsumedAt"
 > {
+  approvedAt: string | null;
   createdAt: string;
+  deniedAt: string | null;
   expiresAt: string;
+  pollConsumedAt: string | null;
+  resultExpired: boolean;
 }
 
 interface SerializedConnector extends Omit<
@@ -41,10 +49,12 @@ export function ConnectorsPanel({
   canManage,
   connectors,
   pairings,
+  sites,
 }: {
   canManage: boolean;
   connectors: SerializedConnector[];
   pairings: SerializedPairingReview[];
+  sites: PairingSite[];
 }) {
   const router = useRouter();
   const [connectorName, setConnectorName] = useState("");
@@ -53,6 +63,7 @@ export function ConnectorsPanel({
   const [selectedScopes, setSelectedScopes] = useState<PairingScope[]>([
     "anytype.objects.read",
   ]);
+  const [selectedSiteIds, setSelectedSiteIds] = useState<string[]>([]);
   const [pairingSecret, setPairingSecret] = useState<PairingSecret | null>(
     null,
   );
@@ -70,6 +81,7 @@ export function ConnectorsPanel({
           protocolVersion: "1.0",
           publicKey,
           requestedScopes: selectedScopes,
+          requestedSiteIds: selectedSiteIds,
           requestedSlugGrants: slugGrants
             .split(",")
             .map((value) => value.trim())
@@ -99,7 +111,7 @@ export function ConnectorsPanel({
               decision,
               grant: {
                 scopes: pairing.requestedScopes,
-                siteIds: [],
+                siteIds: pairing.requestedSiteIds,
                 slugGrants: pairing.requestedSlugGrants,
               },
               pairingId: pairing.id,
@@ -273,6 +285,43 @@ export function ConnectorsPanel({
                 ))}
               </div>
             </fieldset>
+            <fieldset>
+              <legend className="text-sm font-medium">
+                Requested sites <span className="font-normal">(optional)</span>
+              </legend>
+              {sites.length === 0 ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  This workspace has no sites. Site access will remain empty.
+                </p>
+              ) : (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {sites.map((site) => (
+                    <label
+                      className="flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm"
+                      key={site.id}
+                    >
+                      <input
+                        checked={selectedSiteIds.includes(site.id)}
+                        type="checkbox"
+                        onChange={(event) =>
+                          setSelectedSiteIds((current) =>
+                            event.target.checked
+                              ? [...current, site.id]
+                              : current.filter((value) => value !== site.id),
+                          )
+                        }
+                      />
+                      <span>
+                        <span className="block font-medium">{site.name}</span>
+                        <span className="block font-mono text-xs text-muted-foreground">
+                          {site.slug}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </fieldset>
             <div className="space-y-2">
               <Label htmlFor="connector-slugs">
                 Slug grants <span className="font-normal">(optional)</span>
@@ -355,6 +404,19 @@ export function ConnectorsPanel({
                         ))}
                       </dd>
                     </div>
+                    {pairing.requestedSiteIds.length > 0 ? (
+                      <div>
+                        <dt className="font-medium">Requested sites</dt>
+                        <dd className="mt-2 flex flex-wrap gap-1.5">
+                          {pairing.requestedSiteIds.map((siteId) => (
+                            <Badge key={siteId} variant="outline">
+                              {sites.find((site) => site.id === siteId)?.name ??
+                                siteId}
+                            </Badge>
+                          ))}
+                        </dd>
+                      </div>
+                    ) : null}
                     {pairing.requestedSlugGrants.length > 0 ? (
                       <div>
                         <dt className="font-medium">Requested slug grants</dt>
@@ -364,6 +426,11 @@ export function ConnectorsPanel({
                       </div>
                     ) : null}
                   </dl>
+                  {pairing.status !== "pending" ? (
+                    <p className="mt-4 text-xs text-muted-foreground">
+                      {pairingResultLabel(pairing)}
+                    </p>
+                  ) : null}
                   {canManage && pairing.status === "pending" ? (
                     <div className="mt-5 flex gap-2">
                       <Button
@@ -429,6 +496,33 @@ export function ConnectorsPanel({
                     </Badge>
                   ))}
                 </div>
+                {connector.siteIds.length > 0 ||
+                connector.slugGrants.length > 0 ? (
+                  <dl className="mt-3 grid gap-2 text-xs text-muted-foreground">
+                    {connector.siteIds.length > 0 ? (
+                      <div>
+                        <dt className="font-medium text-foreground">Sites</dt>
+                        <dd>
+                          {connector.siteIds
+                            .map(
+                              (siteId) =>
+                                sites.find((site) => site.id === siteId)
+                                  ?.name ?? siteId,
+                            )
+                            .join(", ")}
+                        </dd>
+                      </div>
+                    ) : null}
+                    {connector.slugGrants.length > 0 ? (
+                      <div>
+                        <dt className="font-medium text-foreground">Slugs</dt>
+                        <dd className="font-mono">
+                          {connector.slugGrants.join(", ")}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                ) : null}
                 {canManage && !connector.revokedAt ? (
                   <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
                     <form
@@ -506,4 +600,12 @@ function formatDate(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function pairingResultLabel(pairing: SerializedPairingReview): string {
+  if (pairing.pollConsumedAt) return "The one-time result was retrieved.";
+  if (pairing.resultExpired) {
+    return "The one-time result expired before the connector retrieved it.";
+  }
+  return `The one-time result expires ${formatDate(pairing.expiresAt)}.`;
 }

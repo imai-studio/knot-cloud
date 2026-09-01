@@ -201,6 +201,7 @@ export default async function DashboardPage({
                 canManage={manageConnectors}
                 connectors={connectorData.connectors}
                 pairings={connectorData.pairings}
+                sites={connectorData.sites}
               />
             ) : null
           ) : (
@@ -361,9 +362,10 @@ function SectionEmptyState({
 
 async function loadConnectorData(tenantId: string, includeReviews: boolean) {
   const repository = new NeonPairingRepository();
-  const [connectors, pairings] = await Promise.all([
+  const [connectors, pairings, sites] = await Promise.all([
     repository.listConnectors(tenantId),
     includeReviews ? repository.listReviews(tenantId) : Promise.resolve([]),
+    repository.listSites(tenantId),
   ]);
   return {
     connectors: connectors.map((connector) => ({
@@ -376,6 +378,11 @@ async function loadConnectorData(tenantId: string, includeReviews: boolean) {
       ...pairing,
       createdAt: pairing.createdAt.toISOString(),
       expiresAt: pairing.expiresAt.toISOString(),
+      approvedAt: pairing.approvedAt?.toISOString() ?? null,
+      deniedAt: pairing.deniedAt?.toISOString() ?? null,
+      pollConsumedAt: pairing.pollConsumedAt?.toISOString() ?? null,
+      resultExpired: pairing.expiresAt.getTime() <= Date.now(),
     })),
+    sites,
   };
 }

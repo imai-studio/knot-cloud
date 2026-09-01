@@ -83,7 +83,13 @@ function decisionResponse(
     return noStoreJson({ outcome, ...(connectorId ? { connectorId } : {}) });
   }
   const status =
-    outcome === "not-found" ? 404 : outcome === "expired" ? 410 : 409;
+    outcome === "not-found"
+      ? 404
+      : outcome === "expired"
+        ? 410
+        : outcome === "forbidden"
+          ? 403
+          : 409;
   const titles: Record<string, string> = {
     conflict: "This pairing request already has a different decision.",
     expired: "This pairing request has expired.",
@@ -91,7 +97,7 @@ function decisionResponse(
     "not-found": "This pairing request does not exist in the workspace.",
     "revoked-key": "This public key belongs to a revoked connector.",
     "scope-escalation":
-      "The grant exceeds the scopes requested by the connector.",
+      "The grant exceeds the scopes, sites, or slugs requested by the connector.",
     "unknown-site": "The grant includes a site outside this workspace.",
   };
   const code: ProblemDetails["code"] =

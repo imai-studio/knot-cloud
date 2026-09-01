@@ -10,6 +10,7 @@ export function problemResponse(
     code: ProblemDetails["code"];
     title: string;
     retryable?: boolean;
+    headers?: HeadersInit;
   },
 ) {
   const body = problemDetailsSchema.parse({
@@ -25,6 +26,7 @@ export function problemResponse(
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/problem+json",
+      ...Object.fromEntries(new Headers(input.headers)),
     },
   });
 }

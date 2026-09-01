@@ -1,5 +1,21 @@
 CREATE TYPE pairing_state AS ENUM ('pending', 'approved', 'denied', 'expired');
 
+CREATE FUNCTION knot_array_is_unique(values_array anyarray)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE
+SET search_path = pg_catalog
+AS $$
+  SELECT values_array IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM pg_catalog.unnest(values_array) AS element
+      WHERE element IS NULL
+    )
+    AND pg_catalog.cardinality(values_array) = (
+      SELECT pg_catalog.count(DISTINCT element)
+      FROM pg_catalog.unnest(values_array) AS element
+    )
+$$;
+
 CREATE UNIQUE INDEX connectors_tenant_public_key_idx
   ON connectors (tenant_id, public_key);
 
@@ -32,19 +48,23 @@ CREATE TABLE connector_slug_grants (
 CREATE TABLE pairing_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  created_by_user_id uuid NOT NULL,
+  created_by_user_id uuid,
   connector_name text NOT NULL CHECK (
     length(trim(connector_name)) BETWEEN 1 AND 100
   ),
   protocol_version text NOT NULL,
   public_key bytea NOT NULL CHECK (octet_length(public_key) = 32),
   requested_scopes scope_name[] NOT NULL CHECK (
-    cardinality(requested_scopes) BETWEEN 1 AND 11
-    AND array_position(requested_scopes, NULL) IS NULL
+    cardinality(requested_scopes) >= 1
+    AND knot_array_is_unique(requested_scopes)
+  ),
+  requested_site_ids uuid[] NOT NULL DEFAULT '{}' CHECK (
+    cardinality(requested_site_ids) <= 100
+    AND knot_array_is_unique(requested_site_ids)
   ),
   requested_slug_grants text[] NOT NULL DEFAULT '{}' CHECK (
     cardinality(requested_slug_grants) <= 100
-    AND array_position(requested_slug_grants, NULL) IS NULL
+    AND knot_array_is_unique(requested_slug_grants)
   ),
   poll_token_digest text NOT NULL UNIQUE CHECK (
     poll_token_digest ~ '^[a-f0-9]{64}$'
@@ -62,15 +82,29 @@ CREATE TABLE pairing_sessions (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (tenant_id, id),
   FOREIGN KEY (tenant_id, created_by_user_id)
-    REFERENCES tenant_members(tenant_id, user_id) ON DELETE CASCADE,
+    REFERENCES tenant_members(tenant_id, user_id)
+    ON DELETE SET NULL (created_by_user_id),
   FOREIGN KEY (tenant_id, approved_connector_id)
-    REFERENCES connectors(tenant_id, id) ON DELETE RESTRICT,
+    REFERENCES connectors(tenant_id, id) ON DELETE NO ACTION,
   CHECK (expires_at > created_at),
   CHECK (
-    (state = 'pending' AND approved_connector_id IS NULL AND approved_at IS NULL AND denied_at IS NULL)
-    OR (state = 'approved' AND approved_connector_id IS NOT NULL AND approved_at IS NOT NULL AND denied_at IS NULL)
-    OR (state = 'denied' AND approved_connector_id IS NULL AND approved_at IS NULL AND denied_at IS NOT NULL)
-    OR (state = 'expired' AND approved_connector_id IS NULL AND approved_at IS NULL AND denied_at IS NULL)
+    (state = 'pending' AND approved_connector_id IS NULL AND approved_at IS NULL
+      AND denied_at IS NULL AND granted_scopes IS NULL
+      AND granted_site_ids IS NULL AND granted_slug_grants IS NULL)
+    OR (state = 'approved' AND approved_connector_id IS NOT NULL
+      AND approved_at IS NOT NULL AND denied_at IS NULL
+      AND cardinality(granted_scopes) >= 1
+      AND cardinality(granted_site_ids) <= 100
+      AND cardinality(granted_slug_grants) <= 100
+      AND knot_array_is_unique(granted_scopes)
+      AND knot_array_is_unique(granted_site_ids)
+      AND knot_array_is_unique(granted_slug_grants))
+    OR (state = 'denied' AND approved_connector_id IS NULL AND approved_at IS NULL
+      AND denied_at IS NOT NULL AND granted_scopes IS NULL
+      AND granted_site_ids IS NULL AND granted_slug_grants IS NULL)
+    OR (state = 'expired' AND approved_connector_id IS NULL AND approved_at IS NULL
+      AND denied_at IS NULL AND granted_scopes IS NULL
+      AND granted_site_ids IS NULL AND granted_slug_grants IS NULL)
   )
 );
 
@@ -98,6 +132,8 @@ $$;
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   connector_site_grants, connector_slug_grants, pairing_sessions
 TO knot_app;
+REVOKE ALL ON FUNCTION knot_array_is_unique(anyarray) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION knot_array_is_unique(anyarray) TO knot_app;
 
 CREATE FUNCTION approve_pairing_session(
   requested_tenant_id uuid,
@@ -136,7 +172,6 @@ BEGIN
     RETURN;
   END IF;
   IF cardinality(approved_scopes) < 1
-     OR cardinality(approved_scopes) > 11
      OR cardinality(approved_site_ids) > 100
      OR cardinality(approved_slug_grants) > 100
      OR array_position(approved_scopes, NULL) IS NOT NULL
@@ -183,11 +218,16 @@ BEGIN
     END IF;
     RETURN;
   END IF;
+  IF pairing_record.state = 'expired' THEN
+    RETURN QUERY SELECT 'expired'::text, NULL::uuid, NULL::timestamptz;
+    RETURN;
+  END IF;
   IF pairing_record.state <> 'pending' THEN
-    RETURN QUERY SELECT pairing_record.state::text, NULL::uuid, NULL::timestamptz;
+    RETURN QUERY SELECT 'conflict'::text, NULL::uuid, NULL::timestamptz;
     RETURN;
   END IF;
   IF NOT pairing_record.requested_scopes @> approved_scopes
+     OR NOT pairing_record.requested_site_ids @> approved_site_ids
      OR NOT pairing_record.requested_slug_grants @> approved_slug_grants THEN
     RETURN QUERY SELECT 'scope-escalation'::text, NULL::uuid, NULL::timestamptz;
     RETURN;
@@ -259,15 +299,22 @@ BEGIN
       granted_site_ids = approved_site_ids,
       granted_slug_grants = approved_slug_grants,
       approved_at = resolved_approved_at,
+      expires_at = decision_at + interval '10 minutes',
       updated_at = decision_at
   WHERE tenant_id = requested_tenant_id AND id = requested_pairing_id;
 
   INSERT INTO audit_events (
     tenant_id, principal_kind, principal_id, action,
-    target_kind, target_id, outcome
+    target_kind, target_id, outcome, metadata
   ) VALUES (
     requested_tenant_id, 'human-session', actor_user_id,
-    'connector.pair.approve', 'connector', resolved_connector_id, 'succeeded'
+    'connector.pair.approve', 'connector', resolved_connector_id, 'succeeded',
+    pg_catalog.jsonb_build_object(
+      'pairingId', requested_pairing_id,
+      'scopes', approved_scopes,
+      'siteIds', approved_site_ids,
+      'slugGrants', approved_slug_grants
+    )
   );
 
   RETURN QUERY SELECT 'approved'::text, resolved_connector_id, resolved_approved_at;
@@ -316,7 +363,8 @@ BEGIN
   IF pairing_record.state <> 'pending' THEN RETURN 'conflict'; END IF;
 
   UPDATE pairing_sessions
-  SET state = 'denied', denied_at = decision_at, updated_at = decision_at
+  SET state = 'denied', denied_at = decision_at,
+      expires_at = decision_at + interval '10 minutes', updated_at = decision_at
   WHERE tenant_id = requested_tenant_id AND id = requested_pairing_id;
   INSERT INTO audit_events (
     tenant_id, principal_kind, principal_id, action,
@@ -339,6 +387,8 @@ RETURNS boolean
 LANGUAGE plpgsql VOLATILE
 SET search_path = pg_catalog, public
 AS $$
+DECLARE
+  previous_name text;
 BEGIN
   IF requested_tenant_id IS DISTINCT FROM
      nullif(current_setting('app.tenant_id', true), '')::uuid THEN
@@ -356,15 +406,23 @@ BEGIN
   ) THEN
     RETURN false;
   END IF;
+  SELECT name INTO previous_name
+  FROM connectors
+  WHERE tenant_id = requested_tenant_id AND id = requested_connector_id
+  FOR UPDATE;
+  IF NOT FOUND THEN RETURN false; END IF;
   UPDATE connectors SET name = trim(requested_name)
   WHERE tenant_id = requested_tenant_id AND id = requested_connector_id;
-  IF NOT FOUND THEN RETURN false; END IF;
   INSERT INTO audit_events (
     tenant_id, principal_kind, principal_id, action,
-    target_kind, target_id, outcome
+    target_kind, target_id, outcome, metadata
   ) VALUES (
     requested_tenant_id, 'human-session', actor_user_id,
-    'connector.rename', 'connector', requested_connector_id, 'succeeded'
+    'connector.rename', 'connector', requested_connector_id, 'succeeded',
+    pg_catalog.jsonb_build_object(
+      'oldName', previous_name,
+      'newName', trim(requested_name)
+    )
   );
   RETURN true;
 END
@@ -447,6 +505,7 @@ $$;
 GRANT knot_pairing TO CURRENT_USER;
 GRANT USAGE, CREATE ON SCHEMA public TO knot_pairing;
 GRANT SELECT, UPDATE ON pairing_sessions TO knot_pairing;
+GRANT EXECUTE ON FUNCTION knot_array_is_unique(anyarray) TO knot_pairing;
 CREATE POLICY pairing_poll_access ON pairing_sessions TO knot_pairing
   USING (true) WITH CHECK (true);
 
@@ -482,6 +541,16 @@ BEGIN
 
   IF pairing_record.poll_consumed_at IS NOT NULL THEN
     RETURN QUERY SELECT pairing_record.id, 'consumed'::text,
+      pairing_record.expires_at, NULL::uuid, NULL::uuid,
+      NULL::scope_name[], NULL::uuid[], NULL::text[], NULL::timestamptz;
+    RETURN;
+  END IF;
+  IF pairing_record.state IN ('approved', 'denied')
+     AND pairing_record.expires_at <= polled_at THEN
+    UPDATE pairing_sessions
+    SET poll_consumed_at = polled_at, updated_at = polled_at
+    WHERE id = pairing_record.id;
+    RETURN QUERY SELECT pairing_record.id, 'expired'::text,
       pairing_record.expires_at, NULL::uuid, NULL::uuid,
       NULL::scope_name[], NULL::uuid[], NULL::text[], NULL::timestamptz;
     RETURN;

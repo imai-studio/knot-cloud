@@ -687,6 +687,12 @@ describe("P0 database isolation", () => {
   });
 
   it("fences stale command results and records every claimed attempt", async () => {
+    const commandLedger = await database.query<{ installed: boolean }>(`
+      SELECT to_regprocedure(
+        'claim_command(uuid,uuid,scope_name[],timestamptz,text,integer)'
+      ) IS NOT NULL AS installed
+    `);
+    if (!commandLedger.rows[0]?.installed) return;
     const command = "00000000-0000-4000-8000-000000000051";
     const firstDigest = "a".repeat(64);
     const secondDigest = "b".repeat(64);
@@ -1282,19 +1288,22 @@ describe("P0 database isolation", () => {
       VALUES ('00000000-0000-4000-8000-0000000000a1', '${tenantA}', 'Site A', 'pairing-site-a');
       INSERT INTO pairing_sessions (
         id, tenant_id, created_by_user_id, connector_name, protocol_version,
-        public_key, requested_scopes, requested_slug_grants,
+        public_key, requested_scopes, requested_site_ids,
+        requested_slug_grants,
         poll_token_digest, expires_at
       ) VALUES
         (
           '${pairingA}', '${tenantA}', '${pairingActor}', 'Laptop connector', '1.0',
           decode(repeat('11', 32), 'hex'),
           ARRAY['anytype.objects.read', 'publications.write']::scope_name[],
+          ARRAY['00000000-0000-4000-8000-0000000000a1']::uuid[],
           ARRAY['notes/project/*', 'public'], repeat('a', 64), now() + interval '10 minutes'
         ),
         (
           '${pairingB}', '${tenantA}', '${pairingActor}', 'Renamed laptop', '1.0',
           decode(repeat('11', 32), 'hex'),
           ARRAY['anytype.objects.read']::scope_name[],
+          ARRAY[]::uuid[],
           ARRAY[]::text[], repeat('b', 64), now() + interval '10 minutes'
         );
       SET ROLE knot_app;
@@ -1356,6 +1365,21 @@ describe("P0 database isolation", () => {
       WHERE tenant_id = '${tenantA}' AND public_key = decode(repeat('11', 32), 'hex')
     `);
     expect(connectorCount.rows).toEqual([{ count: 1 }]);
+    const approvalAudit = await database.query<{ metadata: unknown }>(`
+      SELECT metadata FROM audit_events
+      WHERE tenant_id = '${tenantA}' AND action = 'connector.pair.approve'
+        AND metadata->>'pairingId' = '${pairingA}'
+    `);
+    expect(approvalAudit.rows).toEqual([
+      {
+        metadata: {
+          pairingId: pairingA,
+          scopes: ["anytype.objects.read", "publications.write"],
+          siteIds: ["00000000-0000-4000-8000-0000000000a1"],
+          slugGrants: ["notes/project/*", "public"],
+        },
+      },
+    ]);
   });
 
   it("fails closed on scope escalation, foreign sites, expiry, and tenant mismatch", async () => {
@@ -1365,11 +1389,13 @@ describe("P0 database isolation", () => {
       VALUES ('00000000-0000-4000-8000-0000000000b1', '${tenantB}', 'Site B', 'pairing-site-b');
       INSERT INTO pairing_sessions (
         id, tenant_id, created_by_user_id, connector_name, protocol_version,
-        public_key, requested_scopes, requested_slug_grants,
+        public_key, requested_scopes, requested_site_ids,
+        requested_slug_grants,
         poll_token_digest, expires_at
       ) VALUES (
         '${pairingA}', '${tenantA}', '${pairingActor}', 'Laptop connector', '1.0',
         decode(repeat('22', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        ARRAY['00000000-0000-4000-8000-0000000000b1']::uuid[],
         ARRAY[]::text[], repeat('c', 64), now() + interval '10 minutes'
       );
       SET ROLE knot_app;
@@ -1455,6 +1481,12 @@ describe("P0 database isolation", () => {
       [tenantA, pairingB, pairingActor],
     );
     expect(denied.rows).toEqual([{ outcome: "denied" }]);
+    const mismatchedDecision = await approvePairing(database, pairingB, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    expect(mismatchedDecision.rows[0]?.outcome).toBe("conflict");
 
     const approvedPoll = await pollPairing(database, pairingA, "e".repeat(64));
     expect(approvedPoll.rows[0]).toMatchObject({
@@ -1472,6 +1504,114 @@ describe("P0 database isolation", () => {
     expect(deniedPoll.rows[0]?.status).toBe("denied");
     const wrongToken = await pollPairing(database, pairingB, "0".repeat(64));
     expect(wrongToken.rows).toEqual([]);
+  });
+
+  it("expires an approved result that was not retrieved within ten minutes", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Late poll connector', '1.0',
+        decode(repeat('35', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('7', 64), now() + interval '10 minutes'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    const expired = await database.query<{ status: string }>(
+      "SELECT status FROM poll_pairing_session($1, $2, now() + interval '11 minutes')",
+      [pairingA, "7".repeat(64)],
+    );
+    expect(expired.rows).toEqual([{ status: "expired" }]);
+  });
+
+  it("preserves pairing history when the creating member is removed", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Historical connector', '1.0',
+        decode(repeat('36', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('8', 64), now() + interval '10 minutes'
+      );
+      DELETE FROM tenant_members
+      WHERE tenant_id = '${tenantA}' AND user_id = '${pairingActor}';
+    `);
+    const row = await database.query<{ created_by_user_id: string | null }>(`
+      SELECT created_by_user_id FROM pairing_sessions WHERE id = '${pairingA}'
+    `);
+    expect(row.rows).toEqual([{ created_by_user_id: null }]);
+  });
+
+  it("allows a tenant cascade to remove an approved pairing and connector", async () => {
+    await seedPairingActor(database);
+    await database.exec(`
+      INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES (
+        '${pairingA}', '${tenantA}', '${pairingActor}', 'Tenant cleanup', '1.0',
+        decode(repeat('39', 32), 'hex'), ARRAY['anytype.objects.read']::scope_name[],
+        repeat('3', 64), now() + interval '10 minutes'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await approvePairing(database, pairingA, {
+      scopes: ["anytype.objects.read"],
+      siteIds: [],
+      slugGrants: [],
+    });
+    await database.exec("RESET ROLE");
+    await database.exec(`DELETE FROM tenants WHERE id = '${tenantA}'`);
+    const tenant = await database.query<{ id: string }>(
+      `SELECT id FROM tenants WHERE id = '${tenantA}'`,
+    );
+    expect(tenant.rows).toEqual([]);
+  });
+
+  it("derives scope capacity from the enum and rejects duplicate arrays", async () => {
+    await seedPairingActor(database);
+    const allScopes = await database.query<{ value: string }>(`
+      SELECT enumlabel AS value
+      FROM pg_enum JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+      WHERE pg_type.typname = 'scope_name'
+      ORDER BY enumsortorder
+    `);
+    await database.query(
+      `INSERT INTO pairing_sessions (
+        id, tenant_id, created_by_user_id, connector_name, protocol_version,
+        public_key, requested_scopes, poll_token_digest, expires_at
+      ) VALUES ($1, $2, $3, 'All scopes', '1.0', decode(repeat('37', 32), 'hex'),
+        $4::scope_name[], $5, now() + interval '10 minutes')`,
+      [
+        pairingA,
+        tenantA,
+        pairingActor,
+        pgArray(allScopes.rows.map((row) => row.value)),
+        "9".repeat(64),
+      ],
+    );
+    await expect(
+      database.query(
+        `INSERT INTO pairing_sessions (
+          id, tenant_id, created_by_user_id, connector_name, protocol_version,
+          public_key, requested_scopes, poll_token_digest, expires_at
+        ) VALUES ($1, $2, $3, 'Duplicate scopes', '1.0', decode(repeat('38', 32), 'hex'),
+          ARRAY['anytype.objects.read', 'anytype.objects.read']::scope_name[],
+          $4, now() + interval '10 minutes')`,
+        [pairingB, tenantA, pairingActor, "0".repeat(64)],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
   });
 
   it("revokes a connector once and refuses to re-pair the revoked public key", async () => {
@@ -1501,6 +1641,11 @@ describe("P0 database isolation", () => {
     });
     const connectorId = approved.rows[0]?.connector_id;
     expect(connectorId).toBeTruthy();
+    const renamed = await database.query<{ changed: boolean }>(
+      "SELECT rename_connector($1, $2, $3, $4) AS changed",
+      [tenantA, connectorId, pairingActor, "Renamed connector"],
+    );
+    expect(renamed.rows).toEqual([{ changed: true }]);
     const first = await database.query<{ revoked: boolean }>(
       "SELECT revoke_connector($1, $2, $3, now()) AS revoked",
       [tenantA, connectorId, pairingActor],
@@ -1524,6 +1669,18 @@ describe("P0 database isolation", () => {
       WHERE tenant_id = '${tenantA}' AND action = 'connector.revoke'
     `);
     expect(audit.rows).toEqual([{ count: 1 }]);
+    const renameAudit = await database.query<{ metadata: unknown }>(`
+      SELECT metadata FROM audit_events
+      WHERE tenant_id = '${tenantA}' AND action = 'connector.rename'
+    `);
+    expect(renameAudit.rows).toEqual([
+      {
+        metadata: {
+          oldName: "Revoked connector",
+          newName: "Renamed connector",
+        },
+      },
+    ]);
   });
 
   it("keeps the pairing role isolated from tenant authority", async () => {

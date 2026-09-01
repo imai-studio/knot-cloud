@@ -24,8 +24,11 @@ export async function GET(request: Request) {
   return noStoreJson({
     pairings: reviews.map((review) => ({
       ...review,
+      approvedAt: review.approvedAt?.toISOString() ?? null,
       createdAt: review.createdAt.toISOString(),
+      deniedAt: review.deniedAt?.toISOString() ?? null,
       expiresAt: review.expiresAt.toISOString(),
+      pollConsumedAt: review.pollConsumedAt?.toISOString() ?? null,
     })),
   });
 }

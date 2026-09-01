@@ -43,6 +43,21 @@ Human workspace bootstrap and selection use separate functions owned by the no-l
 `knot_bootstrap` role. Neither no-login role can create schema objects, bypass row-level security,
 or inherit another role.
 
+Connector pairing adds the no-login `knot_pairing` role. It owns only
+`poll_pairing_session(uuid,text,timestamptz)`. The role can read and update `pairing_sessions` through
+a policy that permits token lookup before a tenant is known. It cannot read tenant membership,
+approve a connector, create schema objects, bypass row-level security, or inherit another role. The
+migration revokes the temporary schema-create grant before it returns.
+
+`knot_app` creates and lists pairing requests inside an active tenant context. It calls separate
+approval, denial, rename, and revoke functions. Those functions check that the actor is still an
+owner or admin inside the same transaction. Removing a member keeps historical pairing rows and
+clears their `created_by_user_id` value.
+
+Approved pairing rows use an `ON DELETE NO ACTION` connector reference. PostgreSQL checks it at the
+end of a tenant deletion statement, after the tenant cascade has removed both rows. A row-level
+connector delete still fails while pairing history refers to it.
+
 Before applying the tenant bootstrap migration to an existing Better Auth database, check for email
 addresses that differ only by case:
 

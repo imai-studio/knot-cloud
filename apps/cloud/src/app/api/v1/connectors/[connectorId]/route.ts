@@ -11,6 +11,7 @@ export const dynamic = "force-dynamic";
 const renameSchema = z
   .object({ name: z.string().trim().min(1).max(100) })
   .strict();
+const connectorIdSchema = z.uuid();
 
 export async function PATCH(
   request: Request,
@@ -24,15 +25,19 @@ export async function PATCH(
       request,
       "Enter a connector name between 1 and 100 characters.",
     );
-  const { connectorId } = await context.params;
+  const connectorId = connectorIdSchema.safeParse(
+    (await context.params).connectorId,
+  );
+  if (!connectorId.success)
+    return invalidRequest(request, "Invalid connector ID.");
   const changed = await new NeonPairingRepository().rename({
     tenantId: authorized.workspace.tenantId,
     actorUserId: authorized.workspace.userId,
-    connectorId,
+    connectorId: connectorId.data,
     name: input.data.name,
   });
   if (!changed) return notFound(request);
-  return noStoreJson({ connectorId, name: input.data.name });
+  return noStoreJson({ connectorId: connectorId.data, name: input.data.name });
 }
 
 export async function DELETE(
@@ -41,15 +46,19 @@ export async function DELETE(
 ) {
   const authorized = await authorizeMutation(request);
   if (authorized instanceof Response) return authorized;
-  const { connectorId } = await context.params;
+  const connectorId = connectorIdSchema.safeParse(
+    (await context.params).connectorId,
+  );
+  if (!connectorId.success)
+    return invalidRequest(request, "Invalid connector ID.");
   const changed = await new NeonPairingRepository().revoke({
     tenantId: authorized.workspace.tenantId,
     actorUserId: authorized.workspace.userId,
-    connectorId,
+    connectorId: connectorId.data,
     now: new Date(),
   });
   if (!changed) return notFound(request);
-  return noStoreJson({ connectorId, revoked: true });
+  return noStoreJson({ connectorId: connectorId.data, revoked: true });
 }
 
 async function authorizeMutation(request: Request) {
