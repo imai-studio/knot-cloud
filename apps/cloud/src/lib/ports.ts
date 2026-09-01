@@ -1,19 +1,84 @@
-export interface StoredObject {
-  pathname: string;
+export const privateObjectCacheControl =
+  "private, no-store, max-age=0" as const;
+
+export interface ObjectLocator {
+  tenantId: string;
+  sha256: string;
+}
+
+export interface StoredObjectDescriptor extends ObjectLocator {
+  key: string;
   contentType: string;
   size: number;
+}
+
+export interface StoredObject {
+  descriptor: StoredObjectDescriptor;
+  cacheControl: typeof privateObjectCacheControl;
   stream: ReadableStream<Uint8Array>;
 }
 
+export interface TombstonedObject {
+  tenantId: string;
+  key: string;
+  tombstonedAt: Date;
+}
+
 export interface ObjectStore {
+  readonly maxObjectBytes: number;
   putImmutable(input: {
-    pathname: string;
+    locator: ObjectLocator;
     body: ReadableStream<Uint8Array> | Uint8Array;
     contentLength?: number;
     contentType: string;
-  }): Promise<{ pathname: string; size: number }>;
-  get(pathname: string): Promise<StoredObject | undefined>;
-  delete(pathnames: string[]): Promise<void>;
+  }): Promise<StoredObjectDescriptor>;
+  get(locator: ObjectLocator): Promise<StoredObject | undefined>;
+  deleteTombstoned(objects: TombstonedObject[]): Promise<void>;
+}
+
+export type ObjectVisibility = "active" | "missing" | "tombstoned";
+
+export interface ObjectVisibilityStore {
+  getVisibility(locator: ObjectLocator): Promise<ObjectVisibility>;
+}
+
+export type PrivateObjectRead =
+  | { status: "available"; object: StoredObject }
+  | {
+      status: "not-found";
+      cacheControl: typeof privateObjectCacheControl;
+    };
+
+export class RevocableObjectReader {
+  constructor(
+    private readonly objects: ObjectStore,
+    private readonly visibility: ObjectVisibilityStore,
+  ) {}
+
+  async get(locator: ObjectLocator): Promise<PrivateObjectRead> {
+    if ((await this.visibility.getVisibility(locator)) !== "active") {
+      return {
+        status: "not-found",
+        cacheControl: privateObjectCacheControl,
+      };
+    }
+
+    const object = await this.objects.get(locator);
+    if (!object) {
+      return {
+        status: "not-found",
+        cacheControl: privateObjectCacheControl,
+      };
+    }
+    if ((await this.visibility.getVisibility(locator)) !== "active") {
+      await object.stream.cancel("object was tombstoned during the read");
+      return {
+        status: "not-found",
+        cacheControl: privateObjectCacheControl,
+      };
+    }
+    return { status: "available", object };
+  }
 }
 
 export interface ReplayNonceStore {

@@ -13,6 +13,7 @@ Verified locally on 2026-09-01 with Node.js 24 and pnpm 11.
 | Independent review                               | Claude Code Opus High reviewed the initial P0 implementation and the fixes. The final review reported no remaining Critical or High issue in that scope. CodeRabbit was not used.                                                              |
 | Production Vercel build                          | Vercel built the monorepo with Node.js 24 in `iad1`; the production preflight authenticated as the restricted `knot_app` role and completed a private R2 write/read/delete round trip before compiling Next.js.                                |
 | Production endpoints                             | `https://knot.imai.tech/api/health` returned healthy and `https://knot.imai.tech/api/v1/meta` returned protocol metadata over the primary Cloudflare-managed domain. `https://knot.imai.studio` remains a trusted compatibility origin.        |
+| Private object storage                           | Vitest covers tenant-derived keys, immutable writes, exact upload bounds, SHA-256 checks, bounded reads, metadata validation, private cache policy, tombstone gating, deduplicated deletion, and partial R2 delete failures.                   |
 
 The production deployment uses Vercel, Neon, private Cloudflare R2, and Resend. The application
 uses R2 through its S3-compatible API and does not use Vercel Blob. Upstash remains unprovisioned

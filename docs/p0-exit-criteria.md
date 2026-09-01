@@ -18,7 +18,9 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Next.js App Router Node-runtime skeleton.
 - [x] Standalone output configuration.
 - [x] Lazy Neon adapter that does not require build-time environment values.
-- [x] Private immutable Cloudflare R2 adapter with bounded streaming uploads.
+- [x] Private immutable Cloudflare R2 adapter with bounded uploads.
+- [x] Tenant-derived object keys, upload and download digest checks, bounded reads, and typed
+      tombstone deletion.
 - [x] Fail-closed replay-store boundary.
 - [x] Tenant-scoped migration with composite foreign keys, a restricted role, and forced RLS.
 - [x] Transaction-scoped Neon tenant helper and runtime-role assertion.
@@ -28,7 +30,9 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Link the imai Vercel project, provision Neon, and provision a private Cloudflare R2 bucket.
 - [ ] Choose a separate registrable domain for untrusted public content.
 - [ ] Provision Upstash when a released replay-protected route requires it.
-- [ ] Verify direct upload and server-side digest calculation with a large fixture.
+- [x] Verify the private storage port's digest, size, tenant, cache, and tombstone behavior in unit
+      tests.
+- [ ] Verify a large upload against the production R2 limit before raising the 32 MiB default.
 - [ ] Exercise row locking and lease fencing against Neon.
 - [ ] Prove publication-aware media returns 404 immediately after a tombstone.
 - [x] Build and run the generated standalone Next.js server.

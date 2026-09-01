@@ -18,7 +18,7 @@ The current production deployment has four services.
 The web application uses the non-owning `knot_app` database role. Operators apply migrations with a
 separate owner credential that never enters the Vercel environment. The R2 bucket is private. Knot
 uses the AWS S3 client to read and write it, but the current adapter configures Cloudflare R2
-directly. Vercel Blob is not part of this architecture.
+directly.
 
 P0 also contains protocol schemas, migrations, provider adapters, signing code, and tests used by
 later releases. Those foundations do not expose a product API. Knot Cloud has no released route for

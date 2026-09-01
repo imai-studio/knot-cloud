@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -7,49 +9,147 @@ import {
 } from "@aws-sdk/client-s3";
 
 import { getR2Environment } from "@/lib/env";
-import type { ObjectStore, StoredObject } from "@/lib/ports";
+import {
+  privateObjectCacheControl,
+  type ObjectLocator,
+  type ObjectStore,
+  type StoredObject,
+  type StoredObjectDescriptor,
+  type TombstonedObject,
+} from "@/lib/ports";
 
 const deleteBatchSize = 1_000;
+const defaultMaxObjectBytes = 33_554_432;
+const hardMaxObjectBytes = 134_217_728;
+const tenantIdPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const sha256Pattern = /^[a-f0-9]{64}$/u;
 
-function validateObjectKey(pathname: string): void {
-  const segments = pathname.split("/");
-  if (
-    pathname.length === 0 ||
-    pathname.startsWith("/") ||
-    pathname.includes("\\") ||
-    segments.some(
-      (segment) => segment.length === 0 || segment === "." || segment === "..",
-    ) ||
-    new TextEncoder().encode(pathname).byteLength > 1_024
-  ) {
-    throw new TypeError("pathname must be a safe R2 object key");
+export class ObjectDigestMismatchError extends Error {
+  constructor() {
+    super("object bytes do not match the declared SHA-256 digest");
+    this.name = "ObjectDigestMismatchError";
   }
 }
 
-function prepareBody(input: {
+export class ObjectSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ObjectSizeError";
+  }
+}
+
+function validateLocator(locator: ObjectLocator): void {
+  if (!tenantIdPattern.test(locator.tenantId)) {
+    throw new TypeError("tenantId must be a canonical lowercase UUID");
+  }
+  if (!sha256Pattern.test(locator.sha256)) {
+    throw new TypeError("sha256 must be a lowercase 64-character digest");
+  }
+}
+
+export function objectKeyFor(locator: ObjectLocator): string {
+  validateLocator(locator);
+  return `tenants/${locator.tenantId}/assets/${locator.sha256.slice(0, 2)}/${locator.sha256}`;
+}
+
+function validateContentType(contentType: string): void {
+  if (
+    contentType.length === 0 ||
+    contentType.length > 255 ||
+    /[\r\n\0]/u.test(contentType)
+  ) {
+    throw new TypeError("contentType must be a safe non-empty media type");
+  }
+}
+
+function validateTombstonedKey(object: TombstonedObject): string {
+  if (!tenantIdPattern.test(object.tenantId)) {
+    throw new TypeError("tenantId must be a canonical lowercase UUID");
+  }
+  const match = object.key.match(
+    /^tenants\/([0-9a-f-]{36})\/assets\/([a-f0-9]{2})\/([a-f0-9]{64})$/u,
+  );
+  if (
+    !match ||
+    match[1] !== object.tenantId ||
+    match[2] !== match[3]?.slice(0, 2)
+  ) {
+    throw new TypeError("key must be a canonical asset key for tenantId");
+  }
+  return object.key;
+}
+
+async function materializeBody(input: {
   body: ReadableStream<Uint8Array> | Uint8Array;
   contentLength?: number;
-}): { body: ReadableStream<Uint8Array> | Uint8Array; size: number } {
+  maxObjectBytes: number;
+}): Promise<Uint8Array> {
   if (input.body instanceof Uint8Array) {
     if (
       input.contentLength !== undefined &&
       input.contentLength !== input.body.byteLength
     ) {
-      throw new TypeError(
-        "contentLength must match the Uint8Array byte length",
+      throw new ObjectSizeError(
+        "contentLength does not match the Uint8Array byte length",
       );
     }
-    return { body: input.body, size: input.body.byteLength };
+    if (input.body.byteLength > input.maxObjectBytes) {
+      throw new ObjectSizeError("object exceeds the configured upload limit");
+    }
+    return input.body;
   }
+
   if (
     !Number.isSafeInteger(input.contentLength) ||
     (input.contentLength ?? -1) < 0
   ) {
-    throw new TypeError(
-      "contentLength is required for streaming R2 object uploads",
+    throw new ObjectSizeError(
+      "contentLength is required for streaming object uploads",
     );
   }
-  return { body: input.body, size: input.contentLength as number };
+  const contentLength = input.contentLength as number;
+  if (contentLength > input.maxObjectBytes) {
+    throw new ObjectSizeError("object exceeds the configured upload limit");
+  }
+
+  const reader = input.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > contentLength || size > input.maxObjectBytes) {
+        await reader.cancel("object exceeded its declared byte length");
+        throw new ObjectSizeError(
+          "stream contains more bytes than its declared length",
+        );
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (size !== contentLength) {
+    throw new ObjectSizeError(
+      "stream byte length does not match contentLength",
+    );
+  }
+
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+function digest(bytes: Uint8Array, algorithm: "md5" | "sha256"): Buffer {
+  return createHash(algorithm).update(bytes).digest();
 }
 
 function isMissingObject(error: unknown): boolean {
@@ -59,62 +159,154 @@ function isMissingObject(error: unknown): boolean {
   );
 }
 
+function parseStoredSize(metadata: Record<string, string> | undefined): number {
+  const size = Number(metadata?.["byte-size"]);
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new Error("stored object is missing valid byte-size metadata");
+  }
+  return size;
+}
+
+function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 export class R2PrivateObjectStore implements ObjectStore {
   readonly #client: S3Client;
   readonly #bucket: string;
+  readonly maxObjectBytes: number;
 
-  constructor(input?: { client: S3Client; bucket: string }) {
+  constructor(input?: {
+    client: S3Client;
+    bucket: string;
+    maxObjectBytes?: number;
+  }) {
     if (input) {
       this.#client = input.client;
       this.#bucket = input.bucket;
-      return;
+      this.maxObjectBytes = input.maxObjectBytes ?? defaultMaxObjectBytes;
+    } else {
+      const environment = getR2Environment();
+      this.#bucket = environment.R2_BUCKET_NAME;
+      this.maxObjectBytes = environment.R2_MAX_OBJECT_BYTES;
+      this.#client = new S3Client({
+        region: "auto",
+        endpoint: `https://${environment.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        credentials: {
+          accessKeyId: environment.R2_ACCESS_KEY_ID,
+          secretAccessKey: environment.R2_SECRET_ACCESS_KEY,
+        },
+      });
     }
 
-    const environment = getR2Environment();
-    this.#bucket = environment.R2_BUCKET_NAME;
-    this.#client = new S3Client({
-      region: "auto",
-      endpoint: `https://${environment.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: environment.R2_ACCESS_KEY_ID,
-        secretAccessKey: environment.R2_SECRET_ACCESS_KEY,
-      },
-    });
+    if (
+      !Number.isSafeInteger(this.maxObjectBytes) ||
+      this.maxObjectBytes < 1 ||
+      this.maxObjectBytes > hardMaxObjectBytes
+    ) {
+      throw new TypeError(
+        `maxObjectBytes must be between 1 and ${hardMaxObjectBytes}`,
+      );
+    }
   }
 
   async putImmutable(input: {
-    pathname: string;
+    locator: ObjectLocator;
     body: ReadableStream<Uint8Array> | Uint8Array;
     contentLength?: number;
     contentType: string;
-  }): Promise<{ pathname: string; size: number }> {
-    validateObjectKey(input.pathname);
-    const { body, size } = prepareBody(input);
+  }): Promise<StoredObjectDescriptor> {
+    const key = objectKeyFor(input.locator);
+    validateContentType(input.contentType);
+    const body = await materializeBody({
+      body: input.body,
+      contentLength: input.contentLength,
+      maxObjectBytes: this.maxObjectBytes,
+    });
+    const sha256 = digest(body, "sha256").toString("hex");
+    if (sha256 !== input.locator.sha256) {
+      throw new ObjectDigestMismatchError();
+    }
+
     await this.#client.send(
       new PutObjectCommand({
         Bucket: this.#bucket,
-        Key: input.pathname,
+        Key: key,
         Body: body,
-        ContentLength: size,
+        ContentLength: body.byteLength,
+        ContentMD5: digest(body, "md5").toString("base64"),
         ContentType: input.contentType,
+        CacheControl: privateObjectCacheControl,
+        Metadata: {
+          "byte-size": String(body.byteLength),
+          kind: "asset",
+          sha256,
+          "tenant-id": input.locator.tenantId,
+        },
         IfNoneMatch: "*",
       }),
     );
-    return { pathname: input.pathname, size };
+
+    return {
+      ...input.locator,
+      key,
+      contentType: input.contentType,
+      size: body.byteLength,
+    };
   }
 
-  async get(pathname: string): Promise<StoredObject | undefined> {
-    validateObjectKey(pathname);
+  async get(locator: ObjectLocator): Promise<StoredObject | undefined> {
+    const key = objectKeyFor(locator);
     try {
       const result = await this.#client.send(
-        new GetObjectCommand({ Bucket: this.#bucket, Key: pathname }),
+        new GetObjectCommand({
+          Bucket: this.#bucket,
+          Key: key,
+        }),
       );
       if (!result.Body) return undefined;
-      return {
-        pathname,
+
+      const source = result.Body.transformToWebStream();
+      const size = parseStoredSize(result.Metadata);
+      if (
+        result.Metadata?.sha256 !== locator.sha256 ||
+        result.Metadata?.["tenant-id"] !== locator.tenantId ||
+        result.Metadata?.kind !== "asset"
+      ) {
+        await source.cancel("stored object metadata does not match its key");
+        throw new Error("stored object metadata does not match its key");
+      }
+      if (size > this.maxObjectBytes || (result.ContentLength ?? 0) > size) {
+        await source.cancel("stored object exceeds the configured read limit");
+        throw new ObjectSizeError(
+          "stored object exceeds the configured read limit",
+        );
+      }
+
+      const body = await materializeBody({
+        body: source,
+        contentLength: size,
+        maxObjectBytes: this.maxObjectBytes,
+      });
+      if (digest(body, "sha256").toString("hex") !== locator.sha256) {
+        throw new ObjectDigestMismatchError();
+      }
+
+      const descriptor = {
+        ...locator,
+        key,
         contentType: result.ContentType ?? "application/octet-stream",
-        size: result.ContentLength ?? 0,
-        stream: result.Body.transformToWebStream(),
+        size,
+      };
+      return {
+        descriptor,
+        cacheControl: privateObjectCacheControl,
+        stream: streamFromBytes(body),
       };
     } catch (error) {
       if (isMissingObject(error)) return undefined;
@@ -122,10 +314,24 @@ export class R2PrivateObjectStore implements ObjectStore {
     }
   }
 
-  async delete(pathnames: string[]): Promise<void> {
-    for (const pathname of pathnames) validateObjectKey(pathname);
-    for (let index = 0; index < pathnames.length; index += deleteBatchSize) {
-      const batch = pathnames.slice(index, index + deleteBatchSize);
+  async deleteTombstoned(objects: TombstonedObject[]): Promise<void> {
+    const keys = [
+      ...new Set(
+        objects.map((object) => {
+          const { tombstonedAt } = object;
+          if (
+            !(tombstonedAt instanceof Date) ||
+            !Number.isFinite(tombstonedAt.getTime())
+          ) {
+            throw new TypeError("tombstonedAt must be a valid Date");
+          }
+          return validateTombstonedKey(object);
+        }),
+      ),
+    ];
+
+    for (let index = 0; index < keys.length; index += deleteBatchSize) {
+      const batch = keys.slice(index, index + deleteBatchSize);
       if (batch.length === 0) continue;
       const result = await this.#client.send(
         new DeleteObjectsCommand({

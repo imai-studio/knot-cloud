@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseCloudEnvironment,
   parseEmailEnvironment,
+  parseR2Environment,
   signingAuthoritiesFromEnvironment,
   trustedAuthOriginsFromEnvironment,
 } from "./env";
@@ -79,6 +80,37 @@ describe("email environment", () => {
         EMAIL_FROM: "not-an-email",
         KNOT_ALLOWED_EMAILS: "also-not-an-email",
         RESEND_API_KEY: "test-key",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("R2 environment", () => {
+  const requiredR2 = {
+    R2_ACCOUNT_ID: "cloudflare-account",
+    R2_BUCKET_NAME: "knot-private",
+    R2_ACCESS_KEY_ID: "access-key",
+    R2_SECRET_ACCESS_KEY: "secret-key",
+  };
+
+  it("uses a bounded default object size", () => {
+    expect(parseR2Environment(requiredR2).R2_MAX_OBJECT_BYTES).toBe(33_554_432);
+  });
+
+  it("accepts an explicit limit and rejects unsafe values", () => {
+    expect(
+      parseR2Environment({
+        ...requiredR2,
+        R2_MAX_OBJECT_BYTES: "1048576",
+      }).R2_MAX_OBJECT_BYTES,
+    ).toBe(1_048_576);
+    expect(() =>
+      parseR2Environment({ ...requiredR2, R2_MAX_OBJECT_BYTES: "0" }),
+    ).toThrow();
+    expect(() =>
+      parseR2Environment({
+        ...requiredR2,
+        R2_MAX_OBJECT_BYTES: "134217729",
       }),
     ).toThrow();
   });

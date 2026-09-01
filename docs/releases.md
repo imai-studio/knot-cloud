@@ -22,6 +22,8 @@ This file is the release contract. Plans belong in
 - `GET /api/v1/meta` returns the supported protocol range and server time.
 - The production build checks the restricted Neon role and completes a private R2
   write-read-delete round trip.
+- The storage port derives tenant asset keys, checks SHA-256 on bounded transfers, prevents
+  overwrites, and separates database tombstones from physical R2 deletion.
 - The repository builds a standalone Next.js server and a non-root container image.
 
 ### Not released

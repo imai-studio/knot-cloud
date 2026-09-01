@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -6,71 +8,272 @@ import {
 } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
 
-import { R2PrivateObjectStore } from "./r2";
+import { privateObjectCacheControl, type ObjectLocator } from "../ports";
+import {
+  ObjectDigestMismatchError,
+  ObjectSizeError,
+  objectKeyFor,
+  R2PrivateObjectStore,
+} from "./r2";
+
+const tenantA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const tenantB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+function digest(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function locator(bytes: Uint8Array, tenantId = tenantA): ObjectLocator {
+  return { tenantId, sha256: digest(bytes) };
+}
 
 function mockClient(send: (command: unknown) => Promise<unknown>): S3Client {
   return { send: vi.fn(send) } as unknown as S3Client;
 }
 
+function responseBody(bytes: Uint8Array) {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+  return { transformToWebStream: () => stream };
+}
+
+async function consume(
+  stream: ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 describe("R2PrivateObjectStore", () => {
-  it("uses a conditional write so immutable objects cannot be overwritten", async () => {
+  it("derives tenant-scoped keys and rejects caller-controlled path data", () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const first = objectKeyFor(locator(bytes));
+    const second = objectKeyFor(locator(bytes, tenantB));
+
+    expect(first).toBe(
+      `tenants/${tenantA}/assets/${digest(bytes).slice(0, 2)}/${digest(bytes)}`,
+    );
+    expect(second).not.toBe(first);
+    expect(() =>
+      objectKeyFor({
+        tenantId: "../other-tenant",
+        sha256: digest(bytes),
+      }),
+    ).toThrow(/canonical lowercase UUID/u);
+    expect(() =>
+      objectKeyFor({
+        tenantId: tenantA,
+        sha256: "not-a-digest",
+      }),
+    ).toThrow(/64-character digest/u);
+  });
+
+  it("verifies the digest before an immutable write", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
     const client = mockClient(async () => ({}));
     const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
 
     await expect(
       store.putImmutable({
-        pathname: "tenant/assets/digest",
-        body: new Uint8Array([1, 2, 3]),
+        locator: { ...locator(bytes), sha256: "0".repeat(64) },
+        body: bytes,
         contentType: "application/octet-stream",
       }),
-    ).resolves.toEqual({ pathname: "tenant/assets/digest", size: 3 });
+    ).rejects.toBeInstanceOf(ObjectDigestMismatchError);
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it("writes transport checksums, private cache metadata, and object identity", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = mockClient(async () => ({}));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: object,
+        body: bytes,
+        contentType: "application/octet-stream",
+      }),
+    ).resolves.toEqual({
+      ...object,
+      key: objectKeyFor(object),
+      contentType: "application/octet-stream",
+      size: 3,
+    });
 
     const command = vi.mocked(client.send).mock.calls[0]?.[0];
     expect(command).toBeInstanceOf(PutObjectCommand);
     expect((command as PutObjectCommand).input).toMatchObject({
       Bucket: "knot-test",
-      Key: "tenant/assets/digest",
+      Key: objectKeyFor(object),
       ContentLength: 3,
+      ContentMD5: createHash("md5").update(bytes).digest("base64"),
+      CacheControl: privateObjectCacheControl,
       IfNoneMatch: "*",
+      Metadata: {
+        "byte-size": "3",
+        kind: "asset",
+        sha256: object.sha256,
+        "tenant-id": tenantA,
+      },
     });
   });
 
-  it("reads private objects through the authenticated S3 endpoint", async () => {
+  it("bounds streaming uploads and checks their exact byte length", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const client = mockClient(async () => ({}));
+    const store = new R2PrivateObjectStore({
+      client,
+      bucket: "knot-test",
+      maxObjectBytes: 3,
+    });
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array([4, 5]));
+        controller.enqueue(bytes);
         controller.close();
       },
     });
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: stream,
+        contentLength: 3,
+        contentType: "application/octet-stream",
+      }),
+    ).resolves.toMatchObject({ size: 3 });
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: new Uint8Array([1, 2, 3, 4]),
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toBeInstanceOf(ObjectSizeError);
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: new ReadableStream<Uint8Array>(),
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toThrow(/contentLength is required/u);
+  });
+
+  it("reads through the authenticated endpoint and verifies the bytes", async () => {
+    const bytes = new Uint8Array([4, 5]);
+    const object = locator(bytes);
     const client = mockClient(async (command) => {
       expect(command).toBeInstanceOf(GetObjectCommand);
       return {
-        Body: { transformToWebStream: () => stream },
-        ContentLength: 2,
+        Body: responseBody(bytes),
+        ContentLength: bytes.byteLength,
         ContentType: "image/png",
+        Metadata: {
+          "byte-size": String(bytes.byteLength),
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
       };
     });
-    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
-
-    const object = await store.get("tenant/assets/digest");
-    expect(object).toMatchObject({
-      pathname: "tenant/assets/digest",
-      size: 2,
-      contentType: "image/png",
+    const store = new R2PrivateObjectStore({
+      client,
+      bucket: "knot-test",
+      maxObjectBytes: 8,
     });
+
+    const stored = await store.get(object);
+    expect(stored).toMatchObject({
+      descriptor: {
+        ...object,
+        key: objectKeyFor(object),
+        size: 2,
+        contentType: "image/png",
+      },
+      cacheControl: privateObjectCacheControl,
+    });
+    await expect(consume(stored!.stream)).resolves.toEqual(bytes);
+
+    const command = vi.mocked(client.send).mock.calls[0]?.[0];
+    expect((command as GetObjectCommand).input).toMatchObject({
+      Bucket: "knot-test",
+      Key: objectKeyFor(object),
+    });
+    expect((command as GetObjectCommand).input.Range).toBeUndefined();
   });
 
-  it("rejects unsafe keys and batches deletes at the R2 limit", async () => {
-    const client = mockClient(async () => ({}));
-    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+  it("fails a download whose bytes or metadata do not match the key", async () => {
+    const expected = new Uint8Array([4, 5]);
+    const actual = new Uint8Array([4, 6]);
+    const object = locator(expected);
+    const metadata = {
+      "byte-size": "2",
+      kind: "asset",
+      sha256: object.sha256,
+      "tenant-id": object.tenantId,
+    };
+    const client = mockClient(async () => ({
+      Body: responseBody(actual),
+      ContentLength: 2,
+      Metadata: metadata,
+    }));
+    const store = new R2PrivateObjectStore({
+      client,
+      bucket: "knot-test",
+      maxObjectBytes: 8,
+    });
 
-    await expect(store.get("../secret")).rejects.toThrow(/safe R2 object key/u);
-    await expect(store.get("assets//digest")).rejects.toThrow(
-      /safe R2 object key/u,
+    await expect(store.get(object)).rejects.toBeInstanceOf(
+      ObjectDigestMismatchError,
     );
 
-    const keys = Array.from({ length: 1_001 }, (_, index) => `assets/${index}`);
-    await store.delete(keys);
+    metadata["tenant-id"] = tenantB;
+    await expect(store.get(object)).rejects.toThrow(/metadata does not match/u);
+  });
+
+  it("rejects oversized stored objects before returning a body", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const object = locator(bytes);
+    const client = mockClient(async () => ({
+      Body: responseBody(bytes),
+      ContentLength: 4,
+      Metadata: {
+        "byte-size": "4",
+        kind: "asset",
+        sha256: object.sha256,
+        "tenant-id": object.tenantId,
+      },
+    }));
+    const store = new R2PrivateObjectStore({
+      client,
+      bucket: "knot-test",
+      maxObjectBytes: 3,
+    });
+
+    await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
+  });
+
+  it("deletes only tombstoned tenant objects, with deduplication and batching", async () => {
+    const client = mockClient(async () => ({}));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+    const tombstonedAt = new Date("2026-09-01T00:00:00.000Z");
+    const objects = Array.from({ length: 1_001 }, (_, index) => {
+      const bytes = new TextEncoder().encode(String(index));
+      const object = locator(bytes);
+      return {
+        tenantId: object.tenantId,
+        key: objectKeyFor(object),
+        tombstonedAt,
+      };
+    });
+    objects.push(objects[0]!);
+
+    await store.deleteTombstoned(objects);
     const calls = vi.mocked(client.send).mock.calls;
     expect(calls).toHaveLength(2);
     expect(calls[0]?.[0]).toBeInstanceOf(DeleteObjectsCommand);
@@ -82,52 +285,39 @@ describe("R2PrivateObjectStore", () => {
     ).toHaveLength(1);
   });
 
-  it("streams uploads when an explicit content length is supplied", async () => {
-    const client = mockClient(async () => ({}));
-    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2]));
-        controller.close();
-      },
-    });
-
-    await expect(
-      store.putImmutable({
-        pathname: "tenant/assets/stream",
-        body: stream,
-        contentLength: 2,
-        contentType: "application/octet-stream",
-      }),
-    ).resolves.toEqual({ pathname: "tenant/assets/stream", size: 2 });
-    const command = vi.mocked(client.send).mock.calls[0]?.[0];
-    expect((command as PutObjectCommand).input.Body).toBe(stream);
-    expect((command as PutObjectCommand).input.ContentLength).toBe(2);
-  });
-
-  it("rejects an unbounded stream instead of buffering it in memory", async () => {
-    const client = mockClient(async () => ({}));
-    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
-    const stream = new ReadableStream<Uint8Array>();
-
-    await expect(
-      store.putImmutable({
-        pathname: "tenant/assets/stream",
-        body: stream,
-        contentType: "application/octet-stream",
-      }),
-    ).rejects.toThrow(/contentLength is required/u);
-    expect(client.send).not.toHaveBeenCalled();
-  });
-
   it("fails when R2 reports a partial batch-delete error", async () => {
+    const bytes = new Uint8Array([1]);
+    const object = locator(bytes);
     const client = mockClient(async () => ({
-      Errors: [{ Key: "assets/two", Code: "InternalError" }],
+      Errors: [{ Key: objectKeyFor(object), Code: "InternalError" }],
     }));
     const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
 
-    await expect(store.delete(["assets/one", "assets/two"])).rejects.toThrow(
-      /assets\/two/u,
-    );
+    await expect(
+      store.deleteTombstoned([
+        {
+          tenantId: object.tenantId,
+          key: objectKeyFor(object),
+          tombstonedAt: new Date(),
+        },
+      ]),
+    ).rejects.toThrow(new RegExp(object.sha256, "u"));
+  });
+
+  it("rejects a tombstone key from another tenant", async () => {
+    const object = locator(new Uint8Array([1]));
+    const client = mockClient(async () => ({}));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.deleteTombstoned([
+        {
+          tenantId: tenantB,
+          key: objectKeyFor(object),
+          tombstonedAt: new Date(),
+        },
+      ]),
+    ).rejects.toThrow(/canonical asset key/u);
+    expect(client.send).not.toHaveBeenCalled();
   });
 });
