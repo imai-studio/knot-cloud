@@ -88,6 +88,8 @@ restricted `knot_app` role. See
 - [`docs/threat-model.md`](docs/threat-model.md): assets, trust boundaries, threats, and controls.
 - [`docs/database-provisioning.md`](docs/database-provisioning.md): migration and runtime database
   credentials.
+- [`docs/connector-pairing.md`](docs/connector-pairing.md): unreleased pairing candidate and its
+  security boundary.
 - [`docs/workspace-authorization.md`](docs/workspace-authorization.md): human sessions, workspace
   bootstrap, and tenant selection.
 - [`docs/deployment.md`](docs/deployment.md): deployment and provider preflight steps.

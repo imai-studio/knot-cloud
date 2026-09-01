@@ -1301,34 +1301,35 @@ describe("P0 database isolation", () => {
       SELECT set_config('app.tenant_id', '${tenantA}', false);
     `);
 
-    const approved = await database.query<PairingOutcomeRow>(
-      `SELECT * FROM approve_pairing_session(
-        $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
-      )`,
-      [
-        tenantA,
-        pairingA,
-        pairingActor,
-        pgArray(["anytype.objects.read", "publications.write"]),
-        pgArray(["00000000-0000-4000-8000-0000000000a1"]),
-        pgArray(["notes/project/*", "public"]),
-      ],
-    );
+    const [approved, retried] = await Promise.all([
+      database.query<PairingOutcomeRow>(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+        )`,
+        [
+          tenantA,
+          pairingA,
+          pairingActor,
+          pgArray(["anytype.objects.read", "publications.write"]),
+          pgArray(["00000000-0000-4000-8000-0000000000a1"]),
+          pgArray(["notes/project/*", "public"]),
+        ],
+      ),
+      database.query<PairingOutcomeRow>(
+        `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
+        )`,
+        [
+          tenantA,
+          pairingA,
+          pairingActor,
+          pgArray(["publications.write", "anytype.objects.read"]),
+          pgArray(["00000000-0000-4000-8000-0000000000a1"]),
+          pgArray(["public", "notes/project/*"]),
+        ],
+      ),
+    ]);
     expect(approved.rows[0]?.outcome).toBe("approved");
-
-    const retried = await database.query<PairingOutcomeRow>(
-      `SELECT * FROM approve_pairing_session(
-        $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
-      )`,
-      [
-        tenantA,
-        pairingA,
-        pairingActor,
-        pgArray(["publications.write", "anytype.objects.read"]),
-        pgArray(["00000000-0000-4000-8000-0000000000a1"]),
-        pgArray(["public", "notes/project/*"]),
-      ],
-    );
     expect(retried.rows[0]).toMatchObject({
       outcome: "approved",
       connector_id: approved.rows[0]?.connector_id,

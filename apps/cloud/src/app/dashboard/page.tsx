@@ -15,10 +15,13 @@ import { redirect } from "next/navigation";
 
 import { AccountMenu } from "@/components/account-menu";
 import { Brand } from "@/components/brand";
+import { ConnectorsPanel } from "@/components/connectors-panel";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { getAuthorizedSession } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { NeonPairingRepository } from "@/lib/adapters/neon-pairing";
+import { canManageConnectors } from "@/lib/pairing";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -115,6 +118,11 @@ export default async function DashboardPage({
   }
   const view = resolveDashboardView((await searchParams).view);
   const activeItem = navItems.find((item) => item.id === view) ?? navItems[0];
+  const manageConnectors = canManageConnectors(authorized);
+  const connectorData =
+    view === "connectors"
+      ? await loadConnectorData(authorized.workspace.tenantId, manageConnectors)
+      : null;
 
   return (
     <div className="min-h-screen bg-muted/35 lg:grid lg:grid-cols-[240px_1fr]">
@@ -187,6 +195,14 @@ export default async function DashboardPage({
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
           {view === "overview" ? (
             <Overview />
+          ) : view === "connectors" ? (
+            connectorData ? (
+              <ConnectorsPanel
+                canManage={manageConnectors}
+                connectors={connectorData.connectors}
+                pairings={connectorData.pairings}
+              />
+            ) : null
           ) : (
             <SectionEmptyState view={view} />
           )}
@@ -207,9 +223,9 @@ function Overview() {
           Knot Cloud is online
         </h1>
         <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-          This release establishes authenticated access, storage adapters, and
-          the signed protocol foundation. Connector pairing, publishing, and
-          API-key issuance are not released yet.
+          This build includes authenticated workspace access and connector
+          pairing controls. Publishing and API-key issuance are not released
+          yet.
         </p>
       </div>
 
@@ -267,7 +283,7 @@ function Overview() {
 }
 
 const sectionCopy: Record<
-  Exclude<DashboardView, "overview">,
+  Exclude<DashboardView, "overview" | "connectors">,
   {
     description: string;
     detail: string;
@@ -275,14 +291,6 @@ const sectionCopy: Record<
     title: string;
   }
 > = {
-  connectors: {
-    description:
-      "Pair and manage the local Knot runtimes trusted by this workspace.",
-    detail:
-      "Connector enrollment is not part of the current P0 release. Use the setup guide to prepare a local runtime; pairing will appear here when the signed enrollment route ships.",
-    icon: Bot,
-    title: "Connectors",
-  },
   sites: {
     description:
       "Publish selected Anytype objects without exposing your local listener.",
@@ -310,7 +318,7 @@ const sectionCopy: Record<
 function SectionEmptyState({
   view,
 }: {
-  view: Exclude<DashboardView, "overview">;
+  view: Exclude<DashboardView, "overview" | "connectors">;
 }) {
   const { description, detail, icon: Icon, title } = sectionCopy[view];
 
@@ -349,4 +357,25 @@ function SectionEmptyState({
       </section>
     </div>
   );
+}
+
+async function loadConnectorData(tenantId: string, includeReviews: boolean) {
+  const repository = new NeonPairingRepository();
+  const [connectors, pairings] = await Promise.all([
+    repository.listConnectors(tenantId),
+    includeReviews ? repository.listReviews(tenantId) : Promise.resolve([]),
+  ]);
+  return {
+    connectors: connectors.map((connector) => ({
+      ...connector,
+      createdAt: connector.createdAt.toISOString(),
+      lastSeenAt: connector.lastSeenAt?.toISOString() ?? null,
+      revokedAt: connector.revokedAt?.toISOString() ?? null,
+    })),
+    pairings: pairings.map((pairing) => ({
+      ...pairing,
+      createdAt: pairing.createdAt.toISOString(),
+      expiresAt: pairing.expiresAt.toISOString(),
+    })),
+  };
 }

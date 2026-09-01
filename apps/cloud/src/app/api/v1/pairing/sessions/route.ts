@@ -11,6 +11,13 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const authorized = await getAuthorizedWorkspace(request.headers);
   if (!authorized) return authenticationRequired(request);
+  if (!canManageConnectors(authorized)) {
+    return problemResponse(request, {
+      status: 403,
+      code: "forbidden",
+      title: "Only workspace owners and admins can review pairing requests.",
+    });
+  }
   const reviews = await new NeonPairingRepository().listReviews(
     authorized.workspace.tenantId,
   );

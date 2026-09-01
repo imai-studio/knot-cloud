@@ -29,12 +29,16 @@ later routes.
 
 Prerequisites: P1 replay protection and managed-database tests.
 
-- Create or reuse the operator's tenant after an allowed email signs in.
-- Add a short-lived, single-use pairing challenge initiated by a human session.
-- Register the connector's public key, protocol version, name, and requested scopes.
-- Add signed connector heartbeat, command claim, lease renewal, result, and rejection routes.
-- Add connector status, scope review, rename, and revoke controls to the dashboard.
-- Test replay, protocol skew, stale leases, connector revocation, and cross-tenant access.
+Candidate code is complete for the checked items, but it remains unreleased until its stacked changes
+merge and the managed deployment passes the release gates.
+
+- [x] Create or reuse the operator's tenant after an allowed email signs in.
+- [x] Add a short-lived pairing request with a one-time terminal result.
+- [x] Register or reuse the connector's public key, protocol version, name, and approved scopes.
+- [ ] Add signed connector heartbeat, command claim, lease renewal, result, and rejection routes.
+- [x] Add connector status, scope review, rename, and revoke controls to the dashboard.
+- [x] Test pairing replay, expiry, scope escalation, connector revocation, and cross-tenant access.
+- [ ] Test signed-route protocol skew, stale leases, and connector command transport.
 
 The local connector still applies its own policy. A cloud scope permits a request to enter the
 queue. It does not grant local Anytype or filesystem access.
