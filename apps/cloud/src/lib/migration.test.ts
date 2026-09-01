@@ -252,4 +252,184 @@ describe("P0 database isolation", () => {
       ]),
     );
   });
+
+  it("fences stale command results and records every claimed attempt", async () => {
+    const command = "00000000-0000-4000-8000-000000000051";
+    const firstDigest = "a".repeat(64);
+    const secondDigest = "b".repeat(64);
+    await database.exec(`
+      INSERT INTO commands (
+        id,
+        tenant_id,
+        connector_id,
+        required_scope,
+        payload,
+        not_before,
+        expires_at,
+        idempotency_key,
+        created_by_kind,
+        created_by_id,
+        created_at,
+        updated_at
+      ) VALUES (
+        '${command}',
+        '${tenantA}',
+        '${connectorA}',
+        'anytype.objects.read',
+        '{"domain":"anytype","operation":{"type":"object.read"}}',
+        '2026-09-01T00:00:00Z',
+        '2026-09-01T01:00:00Z',
+        'command-idempotency-key',
+        'consumer-api-key',
+        '${apiKeyA}',
+        '2026-09-01T00:00:00Z',
+        '2026-09-01T00:00:00Z'
+      );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+
+    const deniedScope = await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.write}",
+        "2026-09-01T00:00:01Z",
+        "c".repeat(64),
+        30,
+      ],
+    );
+    expect(deniedScope.rows).toEqual([]);
+
+    const firstClaim = await database.query<{
+      attempt: number;
+      lease_expires_at: Date;
+    }>(
+      "SELECT attempt, lease_expires_at FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:01Z",
+        firstDigest,
+        30,
+      ],
+    );
+    expect(firstClaim.rows).toHaveLength(1);
+    expect(firstClaim.rows[0]?.attempt).toBe(1);
+
+    const whileLeased = await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:02Z",
+        secondDigest,
+        30,
+      ],
+    );
+    expect(whileLeased.rows).toEqual([]);
+
+    const wrongExtension = await database.query<{ expires_at: Date | null }>(
+      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6) AS expires_at",
+      [tenantA, command, 1, "2026-09-01T00:00:03Z", secondDigest, 60],
+    );
+    expect(wrongExtension.rows).toEqual([{ expires_at: null }]);
+
+    const secondClaim = await database.query<{ attempt: number }>(
+      "SELECT attempt FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:32Z",
+        secondDigest,
+        30,
+      ],
+    );
+    expect(secondClaim.rows).toEqual([{ attempt: 2 }]);
+
+    const staleResult = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, $4, $5, 'succeeded',
+        '{"type":"object.read","stale":true}', NULL, false, 0
+      )`,
+      [tenantA, command, 1, "2026-09-01T00:00:33Z", firstDigest],
+    );
+    expect(staleResult.rows).toEqual([
+      { completion_status: "stale", command_state: "leased" },
+    ]);
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, $4, $5, 'succeeded',
+          '{"type":"object.read","crossTenant":true}', NULL, false, 0
+        )`,
+        [tenantB, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+      ),
+    ).rejects.toThrow(
+      "Command completion tenant does not match the active tenant",
+    );
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, $4, $5, 'succeeded',
+          '{"type":"object.update"}', NULL, false, 0
+        )`,
+        [tenantA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+      ),
+    ).rejects.toThrow(
+      "Command result type does not match the leased operation",
+    );
+
+    const acceptedResult = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, $4, $5, 'succeeded',
+        '{"type":"object.read","ok":true}', NULL, false, 0
+      )`,
+      [tenantA, command, 2, "2026-09-01T00:00:34Z", secondDigest],
+    );
+    expect(acceptedResult.rows).toEqual([
+      { completion_status: "accepted", command_state: "succeeded" },
+    ]);
+
+    const duplicateResult = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, $4, $5, 'succeeded',
+        '{"type":"object.read","ok":true}', NULL, false, 0
+      )`,
+      [tenantA, command, 2, "2026-09-01T00:00:35Z", secondDigest],
+    );
+    expect(duplicateResult.rows).toEqual([
+      { completion_status: "duplicate", command_state: "succeeded" },
+    ]);
+
+    const attempts = await database.query<{
+      attempt: number;
+      outcome: string | null;
+    }>(
+      `SELECT attempt, outcome
+       FROM command_attempts
+       WHERE tenant_id = $1 AND command_id = $2
+       ORDER BY attempt`,
+      [tenantA, command],
+    );
+    expect(attempts.rows).toEqual([
+      { attempt: 1, outcome: "succeeded" },
+      { attempt: 2, outcome: "succeeded" },
+    ]);
+  });
 });

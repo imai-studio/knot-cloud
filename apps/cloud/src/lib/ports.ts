@@ -31,3 +31,52 @@ export interface JobPublisher {
     payload: unknown;
   }): Promise<void>;
 }
+
+export interface ClaimedCommand {
+  commandId: string;
+  requiredScope: string;
+  payload: unknown;
+  createdByKind: string;
+  createdAt: Date;
+  notBefore: Date;
+  expiresAt: Date;
+  attempt: number;
+  leaseToken: string;
+  leaseExpiresAt: Date;
+}
+
+export type CommandCompletion =
+  | { outcome: "succeeded"; result: unknown }
+  | { outcome: "rejected-by-local-policy"; reasonCode: string }
+  | {
+      outcome: "failed";
+      retryable: boolean;
+      errorCode: string;
+      retryAfterSeconds?: number;
+    };
+
+export interface CommandLedger {
+  claim(input: {
+    tenantId: string;
+    connectorId: string;
+    allowedScopes: string[];
+    leaseSeconds: number;
+  }): Promise<ClaimedCommand | undefined>;
+  extend(input: {
+    tenantId: string;
+    commandId: string;
+    attempt: number;
+    leaseToken: string;
+    leaseSeconds: number;
+  }): Promise<Date | undefined>;
+  complete(input: {
+    tenantId: string;
+    commandId: string;
+    attempt: number;
+    leaseToken: string;
+    completion: CommandCompletion;
+  }): Promise<{
+    status: "accepted" | "duplicate" | "stale" | "unknown-lease";
+    state: string;
+  }>;
+}
