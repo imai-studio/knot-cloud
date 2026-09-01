@@ -33,6 +33,9 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Verify the private storage port's digest, size, tenant, cache, and tombstone behavior in unit
       tests.
 - [ ] Verify a large upload against the production R2 limit before raising the 32 MiB default.
+- [ ] Merge the signed command route candidate and apply its command-ledger migration in production.
+- [ ] Deploy the signed command routes and record a live signed claim, lease extension, and result
+      canary. Until then, the routes remain unreleased even when their code is present in a branch.
 - [ ] Exercise row locking and lease fencing against Neon.
 - [ ] Prove publication-aware media returns 404 immediately after a tombstone.
 - [x] Build and run the generated standalone Next.js server.

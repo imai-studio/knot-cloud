@@ -20,6 +20,11 @@ uses R2 through its S3-compatible API and does not use Vercel Blob. Signed conne
 release-gated until Upstash is provisioned and the provider smoke check passes. The Vercel
 application environment does not contain an owner or migrator database credential.
 
+The signed command implementation and its local database/HTTP tests are candidate evidence only.
+They do not verify a production release. Release still requires merge, production migration,
+Upstash provisioning, provider smoke verification, deployment, and a live signed claim/lease/result
+canary recorded here.
+
 This record does not verify connector pairing, publication mutation, a public reader, API-key
 management, or Anytype data routes. Those routes are not released. The public reader also needs a
 separate registrable domain, which has not been selected.

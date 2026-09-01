@@ -9,7 +9,9 @@ const tenantA = "00000000-0000-4000-8000-000000000001";
 const tenantB = "00000000-0000-4000-8000-000000000002";
 const connectorA = "00000000-0000-4000-8000-000000000011";
 const connectorB = "00000000-0000-4000-8000-000000000012";
+const connectorSameTenant = "00000000-0000-4000-8000-000000000013";
 const apiKeyA = "00000000-0000-4000-8000-000000000021";
+const apiKeyB = "00000000-0000-4000-8000-000000000022";
 const authUserA = "auth-user-workspace-a";
 const authSessionA = "auth-session-workspace-a";
 const authSessionB = "auth-session-workspace-b";
@@ -56,12 +58,13 @@ describe("P0 database isolation", () => {
         id, tenant_id, name, protocol_version, public_key, scopes
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
-        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}');
+        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
+        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'), '{}');
       INSERT INTO api_keys (
         id, tenant_id, name, key_id, key_digest, scopes
-      ) VALUES (
-        '${apiKeyA}', '${tenantA}', 'A key', 'abcdefghijklmnop', repeat('0', 64), '{}'
-      );
+      ) VALUES
+        ('${apiKeyA}', '${tenantA}', 'A key', 'abcdefghijklmnop', repeat('0', 64), '{}'),
+        ('${apiKeyB}', '${tenantB}', 'B key', 'bcdefghijklmnopq', repeat('1', 64), '{}');
     `);
   });
 
@@ -184,6 +187,72 @@ describe("P0 database isolation", () => {
     await expect(
       database.query("SELECT id FROM future_private_table"),
     ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("revokes resolver DDL and enforces command-attempt tenant policies", async () => {
+    const privileges = await database.query<{
+      can_create: boolean;
+      row_security: boolean;
+      forced_row_security: boolean;
+      policies: string[];
+    }>(`
+      SELECT
+        has_schema_privilege('knot_resolver', 'public', 'CREATE') AS can_create,
+        relation.relrowsecurity AS row_security,
+        relation.relforcerowsecurity AS forced_row_security,
+        ARRAY(
+          SELECT policy.polname
+          FROM pg_policy AS policy
+          WHERE policy.polrelid = relation.oid
+          ORDER BY policy.polname
+        ) AS policies
+      FROM pg_class AS relation
+      WHERE relation.oid = 'command_attempts'::regclass
+    `);
+    expect(privileges.rows).toEqual([
+      {
+        can_create: false,
+        row_security: true,
+        forced_row_security: true,
+        policies: ["tenant_insert", "tenant_select", "tenant_update"],
+      },
+    ]);
+
+    const commandA = "00000000-0000-4000-8000-000000000061";
+    const commandB = "00000000-0000-4000-8000-000000000062";
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload, not_before,
+        expires_at, idempotency_key, created_by_kind, created_by_id
+      ) VALUES
+        (
+          '${commandA}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}', now(),
+          now() + interval '1 hour', 'resolver-attempt-a', 'consumer-api-key', '${apiKeyA}'
+        ),
+        (
+          '${commandB}', '${tenantB}', '${connectorB}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}', now(),
+          now() + interval '1 hour', 'resolver-attempt-b', 'consumer-api-key', '${apiKeyB}'
+        );
+      INSERT INTO command_attempts (
+        tenant_id, command_id, attempt, lease_token_digest, claimed_at
+      ) VALUES
+        ('${tenantA}', '${commandA}', 1, '${"a".repeat(64)}', now()),
+        ('${tenantB}', '${commandB}', 1, '${"b".repeat(64)}', now());
+      SET ROLE knot_resolver;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const visible = await database.query<{ tenant_id: string }>(
+      "SELECT tenant_id FROM command_attempts ORDER BY tenant_id",
+    );
+    expect(visible.rows).toEqual([{ tenant_id: tenantA }]);
+    const crossTenantUpdate = await database.query(
+      `UPDATE command_attempts SET error_code = 'escape'
+       WHERE tenant_id = $1 RETURNING tenant_id`,
+      [tenantB],
+    );
+    expect(crossTenantUpdate.rows).toEqual([]);
   });
 
   it("limits the runtime role to data access in the auth schema", async () => {
@@ -410,7 +479,47 @@ describe("P0 database isolation", () => {
           invalidDelayDigest,
         ],
       ),
-    ).rejects.toThrow("Retry delay is out of range");
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Retry delay is out of range"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, NULL, NULL, NULL, false, 0
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Unsupported command outcome"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, 'failed', NULL,
+          'temporary-read-failure', NULL, 30
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Retryable must be specified"),
+    });
 
     const persisted = await database.query<{
       id: string;
@@ -587,6 +696,38 @@ describe("P0 database isolation", () => {
     ).rejects.toThrow(
       "Command completion tenant does not match the active tenant",
     );
+
+    const wrongConnectorResult = await database.query(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, $4, $5, $6, 'succeeded',
+        '{"type":"object.read","wrongConnector":true}', NULL, false, 0
+      )`,
+      [
+        tenantA,
+        connectorSameTenant,
+        command,
+        2,
+        "2026-09-01T00:00:33Z",
+        secondDigest,
+      ],
+    );
+    expect(wrongConnectorResult.rows).toEqual([]);
+    const fencedAttempt = await database.query<{
+      state: string;
+      completed_at: Date | null;
+    }>(
+      `SELECT command.state, attempt.completed_at
+       FROM commands AS command
+       JOIN command_attempts AS attempt
+         ON attempt.tenant_id = command.tenant_id
+        AND attempt.command_id = command.id
+        AND attempt.attempt = 2
+       WHERE command.tenant_id = $1 AND command.id = $2`,
+      [tenantA, command],
+    );
+    expect(fencedAttempt.rows).toEqual([
+      { state: "leased", completed_at: null },
+    ]);
 
     await expect(
       database.query(

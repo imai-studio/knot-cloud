@@ -378,3 +378,50 @@ export function createProductionConnectorCommandHandlers() {
     allowedAuthorities: getSigningAuthorities(),
   });
 }
+
+export type ConnectorCommandOperation = "claim" | "extend" | "complete";
+
+type ConnectorCommandHandlers = ReturnType<
+  typeof createProductionConnectorCommandHandlers
+>;
+
+/**
+ * Build the provider-backed handler once per process. Construction is deliberately
+ * inside the request boundary: a missing or malformed provider setting must not
+ * escape into Next.js' default HTML error response.
+ */
+export function createProductionConnectorCommandDispatcher(
+  factory: () => ConnectorCommandHandlers = createProductionConnectorCommandHandlers,
+) {
+  let handlers: ConnectorCommandHandlers | undefined;
+  let constructionFailed = false;
+
+  return async function dispatch(
+    operation: ConnectorCommandOperation,
+    request: Request,
+    connectorId: string,
+  ): Promise<Response> {
+    if (!handlers && !constructionFailed) {
+      try {
+        handlers = factory();
+      } catch {
+        constructionFailed = true;
+      }
+    }
+    if (!handlers) {
+      return problemResponse({
+        request,
+        status: 503,
+        code: "dependency-unavailable",
+        title: "The connector command service is temporarily unavailable",
+        retryable: true,
+        retryAfterSeconds: 30,
+      });
+    }
+
+    return handlers[operation](request, connectorId);
+  };
+}
+
+export const dispatchProductionConnectorCommand =
+  createProductionConnectorCommandDispatcher();

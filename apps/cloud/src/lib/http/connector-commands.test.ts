@@ -7,7 +7,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CommandLedger } from "@/lib/ports";
 
-import { createConnectorCommandHandlers } from "./connector-commands";
+import {
+  createConnectorCommandHandlers,
+  createProductionConnectorCommandDispatcher,
+} from "./connector-commands";
+import { ConnectorAuthenticationError } from "../security/connector-auth";
 
 const connectorId = "00000000-0000-4000-8000-000000000011";
 const tenantId = "00000000-0000-4000-8000-000000000001";
@@ -171,6 +175,60 @@ describe("connector command HTTP service", () => {
     expect(claim).not.toHaveBeenCalled();
   });
 
+  it("returns server time when connector authentication rejects clock skew", async () => {
+    const service = createConnectorCommandHandlers({
+      commands: commands(),
+      connectors: { findActiveConnector: () => Promise.resolve(undefined) },
+      nonces: { claim: () => Promise.resolve("claimed") },
+      allowedAuthorities: ["knot.test"],
+      authenticate: () =>
+        Promise.reject(new ConnectorAuthenticationError("clock-skew", 401)),
+      now: () => new Date("2026-09-01T00:00:00Z"),
+    });
+    const response = await service.claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(401);
+    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      code: "clock-skew",
+      retryable: false,
+      serverUnixSeconds: 1_788_220_800,
+    });
+  });
+
+  it("returns retry metadata when connector authentication is rate limited", async () => {
+    const service = createConnectorCommandHandlers({
+      commands: commands(),
+      connectors: { findActiveConnector: () => Promise.resolve(undefined) },
+      nonces: { claim: () => Promise.resolve("claimed") },
+      allowedAuthorities: ["knot.test"],
+      authenticate: () =>
+        Promise.reject(new ConnectorAuthenticationError("rate-limited", 429)),
+    });
+    const response = await service.claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      code: "rate-limited",
+      retryable: true,
+      retryAfterSeconds: 60,
+    });
+  });
+
   it("returns lease-lost when an extension is stale", async () => {
     const response = await handlers(commands()).extend(
       request(`/api/v1/connectors/${connectorId}/commands/extend`, {
@@ -320,5 +378,60 @@ describe("connector command HTTP service", () => {
       code: "invalid-request",
       retryable: false,
     });
+  });
+
+  it("returns a typed retryable problem when production providers cannot initialize", async () => {
+    const factory = vi.fn(() => {
+      throw new Error("missing Upstash configuration");
+    });
+    const dispatch = createProductionConnectorCommandDispatcher(factory);
+    const connectorRequest = request(
+      `/api/v1/connectors/${connectorId}/commands/claim`,
+      { protocolVersion: "1.0", maximumCommands: 1, leaseSeconds: 60 },
+    );
+
+    const first = await dispatch("claim", connectorRequest, connectorId);
+    const second = await dispatch(
+      "claim",
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(first.status).toBe(503);
+    expect(first.headers.get("Content-Type")).toContain(
+      "application/problem+json",
+    );
+    expect(first.headers.get("Retry-After")).toBe("30");
+    expect(problemDetailsSchema.parse(await first.json())).toMatchObject({
+      code: "dependency-unavailable",
+      retryable: true,
+      retryAfterSeconds: 30,
+    });
+    expect(second.status).toBe(503);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("memoizes a successfully constructed production handler", async () => {
+    const service = handlers(commands());
+    const factory = vi.fn(() => service);
+    const dispatch = createProductionConnectorCommandDispatcher(factory);
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await dispatch(
+        "claim",
+        request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+          protocolVersion: "1.0",
+          maximumCommands: 1,
+          leaseSeconds: 60,
+        }),
+        connectorId,
+      );
+      expect(response.status).toBe(200);
+    }
+    expect(factory).toHaveBeenCalledTimes(1);
   });
 });

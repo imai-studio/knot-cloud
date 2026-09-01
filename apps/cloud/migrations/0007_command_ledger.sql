@@ -230,25 +230,46 @@ BEGIN
   THEN
     RAISE EXCEPTION 'Command completion tenant does not match the active tenant';
   END IF;
-  IF p_outcome NOT IN ('succeeded', 'rejected-by-local-policy', 'failed') THEN
-    RAISE EXCEPTION 'Unsupported command outcome';
+  IF p_outcome IS NULL
+    OR p_outcome NOT IN ('succeeded', 'rejected-by-local-policy', 'failed')
+  THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Unsupported command outcome';
   END IF;
-  IF p_lease_token_digest !~ '^[a-f0-9]{64}$' THEN
-    RAISE EXCEPTION 'Invalid lease token digest';
+  IF p_lease_token_digest IS NULL
+    OR p_lease_token_digest !~ '^[a-f0-9]{64}$'
+  THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Invalid lease token digest';
+  END IF;
+  IF p_retryable IS NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Retryable must be specified';
   END IF;
   IF p_retryable AND p_outcome <> 'failed' THEN
-    RAISE EXCEPTION 'Only failed commands may be retried';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Only failed commands may be retried';
   END IF;
   IF p_outcome = 'succeeded' AND p_error_code IS NOT NULL THEN
-    RAISE EXCEPTION 'Succeeded commands cannot include an error code';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Succeeded commands cannot include an error code';
   END IF;
   IF p_outcome <> 'succeeded'
     AND (p_error_code IS NULL OR char_length(p_error_code) NOT BETWEEN 1 AND 200)
   THEN
-    RAISE EXCEPTION 'Failed or rejected commands require a bounded error code';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Failed or rejected commands require a bounded error code';
   END IF;
   IF p_outcome <> 'succeeded' AND p_result IS NOT NULL THEN
-    RAISE EXCEPTION 'Only succeeded commands may include a result';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Only succeeded commands may include a result';
   END IF;
   IF p_result IS NOT NULL AND pg_column_size(p_result) > 1048576 THEN
     RAISE EXCEPTION USING
@@ -259,10 +280,14 @@ BEGIN
     OR p_retry_after_seconds < 0
     OR p_retry_after_seconds > 86400
   THEN
-    RAISE EXCEPTION 'Retry delay is out of range';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Retry delay is out of range';
   END IF;
-  IF p_attempt < 1 THEN
-    RAISE EXCEPTION 'Command attempt must be positive';
+  IF p_attempt IS NULL OR p_attempt < 1 THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Command attempt must be positive';
   END IF;
 
   IF p_outcome = 'succeeded' AND EXISTS (
@@ -283,13 +308,17 @@ BEGIN
       MESSAGE = 'Command result type does not match the leased operation';
   END IF;
 
-  SELECT completed_at IS NOT NULL
+  SELECT attempt.completed_at IS NOT NULL
   INTO attempt_was_completed
-  FROM command_attempts
-  WHERE tenant_id = p_tenant_id
-    AND command_id = p_command_id
-    AND attempt = p_attempt
-    AND lease_token_digest = p_lease_token_digest
+  FROM command_attempts AS attempt
+  JOIN commands AS command
+    ON command.tenant_id = attempt.tenant_id
+   AND command.id = attempt.command_id
+  WHERE attempt.tenant_id = p_tenant_id
+    AND attempt.command_id = p_command_id
+    AND attempt.attempt = p_attempt
+    AND attempt.lease_token_digest = p_lease_token_digest
+    AND command.connector_id = p_connector_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
