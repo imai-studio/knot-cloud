@@ -53,7 +53,7 @@ async function run(request: Request): Promise<Response> {
     return Response.json(
       { protocolVersion, ...totals },
       {
-        status: totals.failedTenants || totals.deadLettered ? 500 : 200,
+        status: totals.failedTenants > 0 ? 500 : 200,
         headers: { "Cache-Control": "no-store" },
       },
     );

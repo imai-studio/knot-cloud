@@ -342,6 +342,37 @@ describe("transactional event migration", () => {
           lease_token_digest: null,
         },
       ]);
+      const auditCountBeforeNoOps = await database.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM audit_events
+         WHERE tenant_id=$1::uuid AND principal_id=$2::uuid
+           AND action IN ('webhook.subscription.disable','webhook.delivery')`,
+        [tenantA, "00000000-0000-4000-8000-000000000099"],
+      );
+      const alreadyDisabled = await database.query<{ disabled: boolean }>(
+        `SELECT disable_webhook_subscription($1::uuid,$2::uuid,$3::uuid) AS disabled`,
+        [
+          tenantA,
+          "00000000-0000-4000-8000-000000000099",
+          createdSubscription.rows[0]!.subscription_id,
+        ],
+      );
+      const unknown = await database.query<{ disabled: boolean }>(
+        `SELECT disable_webhook_subscription($1::uuid,$2::uuid,$3::uuid) AS disabled`,
+        [
+          tenantA,
+          "00000000-0000-4000-8000-000000000099",
+          "00000000-0000-4000-8000-000000000098",
+        ],
+      );
+      expect(alreadyDisabled.rows).toEqual([{ disabled: false }]);
+      expect(unknown.rows).toEqual([{ disabled: false }]);
+      const auditCountAfterNoOps = await database.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM audit_events
+         WHERE tenant_id=$1::uuid AND principal_id=$2::uuid
+           AND action IN ('webhook.subscription.disable','webhook.delivery')`,
+        [tenantA, "00000000-0000-4000-8000-000000000099"],
+      );
+      expect(auditCountAfterNoOps.rows).toEqual(auditCountBeforeNoOps.rows);
     } finally {
       await database.close();
     }

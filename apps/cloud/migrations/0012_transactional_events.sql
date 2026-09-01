@@ -200,8 +200,6 @@ CREATE FUNCTION disable_webhook_subscription(
 RETURNS boolean
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp
 AS $$
-DECLARE
-  v_disabled boolean := false;
 BEGIN
   IF p_tenant_id IS DISTINCT FROM
     nullif(current_setting('app.tenant_id', true), '')::uuid
@@ -211,9 +209,8 @@ BEGIN
 
   UPDATE webhook_subscriptions
   SET active=false,updated_at=clock_timestamp()
-  WHERE tenant_id=p_tenant_id AND id=p_subscription_id AND active
-  RETURNING true INTO v_disabled;
-  IF NOT v_disabled THEN RETURN false; END IF;
+  WHERE tenant_id=p_tenant_id AND id=p_subscription_id AND active;
+  IF NOT FOUND THEN RETURN false; END IF;
 
   WITH dead AS (
     UPDATE webhook_deliveries
