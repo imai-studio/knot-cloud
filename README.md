@@ -1,13 +1,13 @@
 # Knot Cloud
 
-Knot Cloud is the remote control and publishing plane under construction for local Knot
-installations. The imai-operated P0 reference foundation runs on Vercel with Neon and private
-Cloudflare R2. The standalone image and provider ports remain the foundation for self-hosting;
-additional object-store and replay-store adapters are not implemented yet.
+Knot Cloud is the remote control and publishing service under construction for local Knot
+installations. The imai-operated P0 deployment runs on Vercel with Neon, private Cloudflare R2, and
+Resend. The same Next.js application builds as a standalone container for self-hosting.
 
-> **Implementation status:** the production P0 foundation and invitation-only operator console are
-> deployed. Public publishing routes and the released local connector are not implemented yet. The
-> hosted health and protocol metadata endpoints do not constitute a usable public API.
+> **Implementation status:** the P0 foundation and invitation-only operator console are deployed.
+> Connector pairing, public publishing, consumer API keys, and the Anytype data API are not
+> released. The health and protocol metadata endpoints are diagnostic endpoints, not a usable data
+> API.
 
 ## P0 contents
 
@@ -36,9 +36,17 @@ pnpm run dev
 
 The operator console is available at `https://knot.imai.tech` and uses invitation-only email magic
 links. `https://knot.imai.studio` remains a trusted compatibility origin. The metadata endpoint is
-`GET /api/v1/meta`; liveness is `GET /api/health`. The imai
-deployment uses Neon, a private Cloudflare R2 bucket, and a domain-restricted Resend sending key.
-Redis remains unprovisioned because no released route uses it yet.
+`GET /api/v1/meta`; liveness is `GET /api/health`.
+
+The imai deployment uses Neon, a private Cloudflare R2 bucket, and a domain-restricted Resend
+sending key. Knot accesses R2 with the AWS S3 client. It does not use Vercel Blob. The current
+object-store adapter is R2-specific even though R2 implements the S3 protocol. A general
+S3-compatible adapter for self-hosters remains planned. Upstash is not provisioned because no
+released signed mutation route needs replay storage yet.
+
+The public-content hostname is unresolved. Hosted reader pages must use a separate registrable
+domain from the operator console before publishing can ship. `CONTENT_BASE_URL` is a configuration
+boundary, not an approved production content domain.
 
 The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `KNOT_ALLOWED_EMAILS`, and
 `RESEND_API_KEY`. Set `AUTH_TRUSTED_ORIGINS` to a comma-separated list when the same deployment is
@@ -52,10 +60,14 @@ container. The application `DATABASE_URL` must authenticate directly as the rest
 role. Self-hosters may run the Dockerfile's dedicated `migrator` target with the owner credential
 and the `runner` target with only the restricted runtime credential.
 
-See [`docs/threat-model.md`](docs/threat-model.md),
+See [`ARCHITECTURE.md`](ARCHITECTURE.md),
+[`docs/threat-model.md`](docs/threat-model.md),
 [`docs/database-provisioning.md`](docs/database-provisioning.md),
 [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md), and
 [`docs/p0-verification.md`](docs/p0-verification.md) for the current security boundary and evidence.
+
+[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) lists the dependency order for
+unreleased work. [`docs/releases.md`](docs/releases.md) is the source of truth for shipped behavior.
 
 ## Repositories
 

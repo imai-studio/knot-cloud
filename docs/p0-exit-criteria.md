@@ -23,6 +23,7 @@ P0 freezes the compatibility and security boundaries before a public API exists.
 - [x] Tenant-scoped migration with composite foreign keys, a restricted role, and forced RLS.
 - [x] Transaction-scoped Neon tenant helper and runtime-role assertion.
 - [x] Link the imai Vercel project, provision Neon, and provision a private Cloudflare R2 bucket.
+- [ ] Choose a separate registrable domain for untrusted public content.
 - [ ] Provision Upstash when a released replay-protected route requires it.
 - [ ] Verify direct upload and server-side digest calculation with a large fixture.
 - [ ] Exercise row locking and lease fencing against Neon.
