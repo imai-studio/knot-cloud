@@ -10,7 +10,8 @@ deployment, or workflow as released until its release record says so.
 - Keep human sessions, connector signing keys, consumer API keys, and first-party service credentials
   non-interchangeable.
 - Never log or commit invitations, API keys, signing keys, Anytype credentials, participant IDs,
-  database URLs, Blob tokens, email credentials, or local paths supplied by an operator.
+  database URLs, object-store credentials, email credentials, or local paths supplied by an
+  operator.
 - Every authoritative tenant row is tenant-scoped. Production database access must authenticate as
   the non-owning `knot_app` role and use the transactional tenant helper so row-level security is
   active, not only application `WHERE` clauses.
