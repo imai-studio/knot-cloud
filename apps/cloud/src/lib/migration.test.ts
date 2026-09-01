@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,31 @@ const apiKeyB = "00000000-0000-4000-8000-000000000022";
 const authUserA = "auth-user-workspace-a";
 const authSessionA = "auth-session-workspace-a";
 const authSessionB = "auth-session-workspace-b";
+
+describe("migration inventory", () => {
+  it("grandfathers the shipped 0001 pair and keeps later prefixes unique", async () => {
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const migrationFiles = (await readdir(migrationDirectory))
+      .filter((name) => /^\d+.*\.sql$/u.test(name))
+      .sort();
+    expect(migrationFiles.every((name) => /^\d{4}_.+\.sql$/u.test(name))).toBe(
+      true,
+    );
+    expect(migrationFiles.filter((name) => name.startsWith("0001_"))).toEqual([
+      "0001_active_asset_uniqueness.sql",
+      "0001_command_ledger.sql",
+    ]);
+    const laterPrefixes = migrationFiles
+      .filter((name) => Number(name.slice(0, 4)) >= 2)
+      .map((name) => name.slice(0, 4));
+    expect(new Set(laterPrefixes).size).toBe(laterPrefixes.length);
+  });
+});
 
 describe("P0 database isolation", () => {
   let database: PGlite;
@@ -70,6 +96,61 @@ describe("P0 database isolation", () => {
 
   afterEach(async () => {
     await database.close();
+  });
+
+  it("preserves the shipped command migration and upgrades signatures additively", async () => {
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const shippedCommandMigration = await readFile(
+      path.join(migrationDirectory, "0001_command_ledger.sql"),
+    );
+    expect(
+      createHash("sha256").update(shippedCommandMigration).digest("hex"),
+    ).toBe("5f2d4b00df78c17bdf7e0115eb111c9b6f076f871dbd6f2ed7ae91c4f1a44546");
+
+    const signatures = await database.query<{
+      old_extend: string | null;
+      new_extend: string | null;
+      old_complete: string | null;
+      new_complete: string | null;
+      scope_constraint: string | null;
+    }>(`
+      SELECT
+        to_regprocedure(
+          'extend_command_lease(uuid,uuid,integer,timestamptz,text,integer)'
+        )::text AS old_extend,
+        to_regprocedure(
+          'extend_command_lease(uuid,uuid,uuid,integer,timestamptz,text,integer)'
+        )::text AS new_extend,
+        to_regprocedure(
+          'complete_command(uuid,uuid,integer,timestamptz,text,command_state,jsonb,text,boolean,integer)'
+        )::text AS old_complete,
+        to_regprocedure(
+          'complete_command(uuid,uuid,uuid,integer,timestamptz,text,command_state,jsonb,text,boolean,integer)'
+        )::text AS new_complete,
+        (
+          SELECT constraint_name
+          FROM information_schema.table_constraints
+          WHERE table_schema = 'public'
+            AND table_name = 'commands'
+            AND constraint_name = 'commands_required_scope_matches_payload'
+        ) AS scope_constraint
+    `);
+    expect(signatures.rows).toEqual([
+      {
+        old_extend: null,
+        new_extend:
+          "extend_command_lease(uuid,uuid,uuid,integer,timestamp with time zone,text,integer)",
+        old_complete: null,
+        new_complete:
+          "complete_command(uuid,uuid,uuid,integer,timestamp with time zone,text,command_state,jsonb,text,boolean,integer)",
+        scope_constraint: "commands_required_scope_matches_payload",
+      },
+    ]);
   });
 
   it("fails closed without a tenant and reveals only the selected tenant", async () => {
