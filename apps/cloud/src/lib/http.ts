@@ -1,10 +1,13 @@
-import { problemDetailsSchema } from "@imai/knot-cloud-contract";
+import {
+  problemDetailsSchema,
+  type ProblemDetails,
+} from "@imai/knot-cloud-contract";
 
 export function problemResponse(
   request: Request,
   input: {
     status: number;
-    code: string;
+    code: ProblemDetails["code"];
     title: string;
     retryable?: boolean;
   },

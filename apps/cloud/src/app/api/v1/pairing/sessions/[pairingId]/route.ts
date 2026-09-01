@@ -1,6 +1,7 @@
 import {
   pairingApprovalSchema,
   pairingDenialSchema,
+  type ProblemDetails,
 } from "@imai/knot-cloud-contract";
 import { z } from "zod";
 
@@ -49,7 +50,7 @@ export async function PUT(
     return failure(
       request,
       400,
-      "invalid-decision",
+      "invalid-request",
       "The pairing decision is invalid.",
     );
   }
@@ -93,7 +94,7 @@ function decisionResponse(
       "The grant exceeds the scopes requested by the connector.",
     "unknown-site": "The grant includes a site outside this workspace.",
   };
-  const code =
+  const code: ProblemDetails["code"] =
     outcome === "not-found"
       ? "not-found"
       : outcome === "forbidden"
@@ -112,7 +113,7 @@ function decisionResponse(
 function failure(
   request: Request,
   status: number,
-  code: string,
+  code: ProblemDetails["code"],
   title: string,
 ) {
   return problemResponse(request, { status, code, title });
