@@ -61,6 +61,10 @@ until the operator records that choice and the renderer passes the P1 browser te
 
 ## Not in P0
 
+The R2 bucket has no public URL. Private reads use `Cache-Control: private, no-store, max-age=0` and
+check durable visibility before object storage. A later public renderer needs a separate
+registrable domain and its own cache invalidation design.
+
 - The cloud does not prove a raw Anytype participant ID supplied by a client.
 - The cloud does not grant local filesystem, project, model, or agent permissions.
 - P0 provides invitation-only operator login. It does not provide connector pairing, a publishing

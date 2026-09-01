@@ -12,3 +12,4 @@ coverage/
 .DS_Store
 .vercel
 .env*
+!apps/cloud/.env.example

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   DeleteObjectCommand,
@@ -62,8 +62,10 @@ if (
 }
 
 const bucket = process.env.R2_BUCKET_NAME;
-const key = `smoke/${randomUUID()}.txt`;
 const expected = new TextEncoder().encode("knot-cloud-provider-smoke-test");
+const tenantId = randomUUID();
+const sha256 = createHash("sha256").update(expected).digest("hex");
+const key = `tenants/${tenantId}/assets/${sha256.slice(0, 2)}/${sha256}`;
 const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -81,13 +83,25 @@ try {
       Bucket: bucket,
       Key: key,
       Body: expected,
+      CacheControl: "private, no-store, max-age=0",
+      ContentLength: expected.byteLength,
+      ContentMD5: createHash("md5").update(expected).digest("base64"),
       ContentType: "text/plain",
+      Metadata: {
+        "byte-size": String(expected.byteLength),
+        kind: "asset",
+        sha256,
+        "tenant-id": tenantId,
+      },
       IfNoneMatch: "*",
     }),
   );
   uploaded = true;
   const stored = await r2.send(
-    new GetObjectCommand({ Bucket: bucket, Key: key }),
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    }),
   );
   const actual = await stored.Body?.transformToByteArray();
   if (
@@ -95,6 +109,14 @@ try {
     Buffer.compare(Buffer.from(actual), Buffer.from(expected)) !== 0
   ) {
     throw new Error("R2 smoke object did not round-trip exactly");
+  }
+  if (
+    stored.Metadata?.sha256 !== sha256 ||
+    stored.Metadata?.["tenant-id"] !== tenantId ||
+    stored.Metadata?.kind !== "asset" ||
+    stored.CacheControl !== "private, no-store, max-age=0"
+  ) {
+    throw new Error("R2 smoke object metadata did not round-trip exactly");
   }
 } catch (error) {
   operationFailed = true;

@@ -3,9 +3,11 @@ import { R2PrivateObjectStore } from "./r2";
 
 import type { ObjectStore, ReplayNonceStore } from "@/lib/ports";
 
+let objectStore: ObjectStore | undefined;
+
 export function createObjectStore(): ObjectStore {
   const driver = process.env.OBJECT_STORE_DRIVER ?? "r2";
-  if (driver === "r2") return new R2PrivateObjectStore();
+  if (driver === "r2") return (objectStore ??= new R2PrivateObjectStore());
   throw new Error(`Unsupported OBJECT_STORE_DRIVER: ${driver}`);
 }
 

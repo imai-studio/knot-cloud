@@ -31,6 +31,12 @@ const r2EnvironmentSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/u),
   R2_ACCESS_KEY_ID: z.string().min(1),
   R2_SECRET_ACCESS_KEY: z.string().min(1),
+  R2_MAX_OBJECT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(134_217_728)
+    .default(33_554_432),
 });
 
 const upstashEnvironmentSchema = z.object({
@@ -150,7 +156,11 @@ export function getApiKeyPeppers(): Array<{ version: number; value: string }> {
 }
 
 export function getR2Environment() {
-  return r2EnvironmentSchema.parse(process.env);
+  return parseR2Environment(process.env);
+}
+
+export function parseR2Environment(input: Record<string, string | undefined>) {
+  return r2EnvironmentSchema.parse(input);
 }
 
 export function getUpstashEnvironment() {
