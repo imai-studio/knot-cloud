@@ -19,7 +19,8 @@ export class HttpProblem extends Error {
 }
 
 export function problemResponse(input: {
-  problemBaseUrl: string;
+  problemBaseUrl?: string;
+  request?: Request;
   status: ProblemDetails["status"];
   code: ProblemDetails["code"];
   title: string;
@@ -30,9 +31,15 @@ export function problemResponse(input: {
   logEvent?:
     "connector-command-internal-error" | "connector-provider-unavailable";
 }): Response {
+  const problemBaseUrl =
+    input.problemBaseUrl ??
+    (input.request ? new URL(input.request.url).origin : undefined);
+  if (!problemBaseUrl) {
+    throw new TypeError("problemResponse requires problemBaseUrl or request");
+  }
   const requestId = randomBytes(16).toString("base64url");
   const body = problemDetailsSchema.parse({
-    type: new URL(`/problems/${input.code}`, input.problemBaseUrl).toString(),
+    type: new URL(`/problems/${input.code}`, problemBaseUrl).toString(),
     title: input.title,
     status: input.status,
     code: input.code,

@@ -63,9 +63,9 @@ describe("publication lifecycle migration", () => {
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'),
          '{publications.read,publications.write,publications.unpublish}'),
-        ('${connectorA2}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'),
+        ('${connectorA2}', '${tenantA}', 'A2', '1.0', decode(repeat('01', 32), 'hex'),
          '{publications.read,publications.write,publications.unpublish}'),
-        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'),
+        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('02', 32), 'hex'),
          '{publications.read,publications.write,publications.unpublish}');
       INSERT INTO sites (id, tenant_id, name, slug) VALUES
         ('${siteA}', '${tenantA}', 'Site A', 'site-a'),

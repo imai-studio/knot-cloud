@@ -204,12 +204,6 @@ function parseStoredSize(metadata: Record<string, string> | undefined): number {
   return size;
 }
 
-function parseStoredContentType(contentType: string | undefined): string {
-  if (contentType === undefined) return "application/octet-stream";
-  validateContentType(contentType);
-  return contentType;
-}
-
 function verifySinglePartEtag(
   etag: string | undefined,
   bytes: Uint8Array,
@@ -240,6 +234,8 @@ function validateStoredAssetMetadata(input: {
   maxObjectBytes: number;
 }): { contentType: string; size: number } {
   const size = parseStoredSize(input.metadata);
+  const contentType = input.contentType ?? "application/octet-stream";
+  if (input.contentType !== undefined) validateContentType(input.contentType);
   if (
     input.metadata?.sha256 !== input.locator.sha256 ||
     input.metadata?.["tenant-id"] !== input.locator.tenantId ||
@@ -256,7 +252,7 @@ function validateStoredAssetMetadata(input: {
     );
   }
   return {
-    contentType: input.contentType ?? "application/octet-stream",
+    contentType,
     size,
   };
 }

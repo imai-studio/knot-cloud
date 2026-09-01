@@ -229,9 +229,7 @@ export default async function DashboardPage({
               initialSites={initialSites}
             />
           ) : null}
-          {view !== "overview" &&
-          view !== "connectors" &&
-          view !== "sites" ? (
+          {view !== "overview" && view !== "connectors" && view !== "sites" ? (
             <SectionEmptyState view={view} />
           ) : null}
         </main>
