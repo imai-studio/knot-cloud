@@ -561,6 +561,29 @@ describe("P0 database isolation", () => {
       SET ROLE knot_app;
       SELECT set_config('app.tenant_id', '${tenantA}', false);
     `);
+    const resolverAcl = await database.query<{
+      app_executes: boolean;
+      public_executes: boolean;
+    }>(`
+      SELECT
+        has_function_privilege(
+          'knot_app', 'resolve_consumer_api_key(text)', 'EXECUTE'
+        ) AS app_executes,
+        EXISTS (
+          SELECT 1
+          FROM pg_proc AS function
+          CROSS JOIN LATERAL aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE function.oid = 'resolve_consumer_api_key(text)'::regprocedure
+            AND privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes
+    `);
+    expect(resolverAcl.rows).toEqual([
+      { app_executes: true, public_executes: false },
+    ]);
+
     const created = await database.query<{ id: string }>(
       `SELECT create_consumer_api_key(
         $1::uuid, $2::uuid, 'Read integration', 'qrstuvwxyzABCDEF', $3::text,
