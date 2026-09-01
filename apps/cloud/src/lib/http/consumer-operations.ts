@@ -258,18 +258,19 @@ export function createConsumerOperationHandlers(
           );
         }
         if (record.state === "failed") {
+          const failureCode = record.errorCode ?? "connector-offline";
           return jsonResponse(
             operationResourceSchema.parse({
               ...base,
               status: "failed",
               problem: problemDetailsSchema.parse({
                 type: new URL(
-                  "/problems/connector-offline",
+                  `/problems/${encodeURIComponent(failureCode)}`,
                   request.url,
                 ).toString(),
                 title: "The local connector could not complete the operation",
                 status: 502,
-                code: "connector-offline",
+                code: failureCode,
                 requestId: crypto.randomUUID().replaceAll("-", ""),
                 retryable: false,
               }),

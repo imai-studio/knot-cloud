@@ -145,7 +145,7 @@ export default async function DashboardPage({
     }
   }
   const apiKeys =
-    view === "api-keys"
+    view === "api-keys" && manageConnectors
       ? await new NeonConsumerDataRepository().listApiKeys(
           authorized.workspace.tenantId,
         )
@@ -237,7 +237,21 @@ export default async function DashboardPage({
               initialSites={initialSites}
             />
           ) : null}
-          {view === "api-keys" ? <ApiKeyManager initialKeys={apiKeys} /> : null}
+          {view === "api-keys" ? (
+            manageConnectors ? (
+              <ApiKeyManager initialKeys={apiKeys} />
+            ) : (
+              <section className="max-w-2xl rounded-2xl border bg-background p-6">
+                <h1 className="font-heading text-2xl font-semibold">
+                  API keys require owner access
+                </h1>
+                <p className="mt-2 leading-7 text-muted-foreground">
+                  Workspace members cannot view key metadata or manage API
+                  credentials. Ask a workspace owner to make this change.
+                </p>
+              </section>
+            )
+          ) : null}
           {view !== "overview" &&
           view !== "connectors" &&
           view !== "sites" &&

@@ -202,6 +202,23 @@ describe("typed remote operations", () => {
     ).toThrow();
   });
 
+  it("requires operation expiry to be later than creation", () => {
+    expect(() =>
+      anytypeOperationRequestSchema.parse({
+        protocolVersion,
+        connectorId: "connector-1",
+        idempotencyKey: "operation-key-0003",
+        createdAt: 1_788_192_000,
+        expiresAt: 1_788_192_000,
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      }),
+    ).toThrow(/expiry/u);
+  });
+
   it("requires lease fencing on commands", () => {
     expect(() =>
       commandEnvelopeSchema.parse({
