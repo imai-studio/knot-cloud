@@ -80,8 +80,22 @@ JOIN pg_namespace AS namespace ON namespace.oid = function.pronamespace
 WHERE namespace.nspname = 'public'
   AND function.prosecdef
   AND (
-    has_function_privilege('public', function.oid, 'EXECUTE')
-    OR NOT has_function_privilege('knot_app', function.oid, 'EXECUTE')
+    EXISTS (
+      SELECT 1
+      FROM aclexplode(
+        coalesce(function.proacl, acldefault('f', function.proowner))
+      ) AS privilege
+      WHERE privilege.grantee = 0
+        AND privilege.privilege_type = 'EXECUTE'
+    )
+    OR NOT EXISTS (
+      SELECT 1
+      FROM aclexplode(
+        coalesce(function.proacl, acldefault('f', function.proowner))
+      ) AS privilege
+      WHERE privilege.grantee = 'knot_app'::regrole
+        AND privilege.privilege_type = 'EXECUTE'
+    )
   );
 ```
 
