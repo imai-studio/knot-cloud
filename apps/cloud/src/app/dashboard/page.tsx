@@ -2,11 +2,9 @@ import {
   Activity,
   ArrowUpRight,
   Bot,
-  Check,
   FileText,
   Globe2,
   KeyRound,
-  ShieldCheck,
 } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
@@ -15,6 +13,10 @@ import { redirect } from "next/navigation";
 
 import { AccountMenu } from "@/components/account-menu";
 import { ApiKeyManager } from "@/components/api-key-manager";
+import {
+  AuditLogPanel,
+  type SerializedAuditPage,
+} from "@/components/audit-log-panel";
 import { Brand } from "@/components/brand";
 import { ConnectorsPanel } from "@/components/connectors-panel";
 import {
@@ -22,9 +24,8 @@ import {
   type Publication,
   type Site,
 } from "@/components/sites-panel";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
 import { getAuthorizedSession } from "@/lib/auth";
+import { NeonAuditRepository } from "@/lib/adapters/neon-audit";
 import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
 import { NeonConsumerDataRepository } from "@/lib/adapters/neon-consumer-data";
 import { cn } from "@/lib/utils";
@@ -34,27 +35,6 @@ import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
-
-const availableResources = [
-  {
-    detail: "Confirms the deployed service can answer requests.",
-    href: "/api/health",
-    label: "Service health",
-    value: "Live endpoint",
-  },
-  {
-    detail: "Returns the versioned protocol and capability manifest.",
-    href: "/api/v1/meta",
-    label: "Protocol metadata",
-    value: "Versioned JSON",
-  },
-  {
-    detail: "Prepare a local runtime using the released Knot CLI.",
-    href: "https://github.com/imai-studio/knot/blob/main/docs/agent-setup.md",
-    label: "Local Knot setup",
-    value: "Operator guide",
-  },
-] as const;
 
 const navItems = [
   { href: "/dashboard", icon: Activity, id: "overview", label: "Overview" },
@@ -150,9 +130,35 @@ export default async function DashboardPage({
           authorized.workspace.tenantId,
         )
       : [];
+  const apiKeyConnectors =
+    view === "api-keys" && manageConnectors
+      ? await new NeonPairingRepository().listConnectors(
+          authorized.workspace.tenantId,
+        )
+      : [];
+  let auditPage: SerializedAuditPage | null = null;
+  if (view === "audit-log" && manageConnectors) {
+    const page = await new NeonAuditRepository().list(
+      authorized.workspace.tenantId,
+      { limit: 25 },
+    );
+    auditPage = {
+      events: page.events.map((event) => ({
+        ...event,
+        createdAt: event.createdAt.toISOString(),
+      })),
+      nextCursor: page.nextCursor,
+    };
+  }
 
   return (
-    <div className="min-h-screen bg-muted/35 lg:grid lg:grid-cols-[240px_1fr]">
+    <div className="min-h-screen bg-background lg:grid lg:grid-cols-[240px_1fr]">
+      <a
+        href="#dashboard-content"
+        className="sr-only z-50 rounded-md bg-background px-3 py-2 focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:outline-2 focus:outline-offset-2 focus:outline-ring"
+      >
+        Skip to dashboard content
+      </a>
       <aside className="hidden border-r bg-sidebar lg:flex lg:min-h-screen lg:flex-col">
         <div className="flex h-16 items-center border-b px-5">
           <Brand href="/dashboard" />
@@ -219,7 +225,10 @@ export default async function DashboardPage({
           })}
         </nav>
 
-        <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+        <main
+          id="dashboard-content"
+          className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10"
+        >
           {view === "overview" ? <Overview /> : null}
           {view === "connectors" ? (
             connectorData ? (
@@ -239,24 +248,25 @@ export default async function DashboardPage({
           ) : null}
           {view === "api-keys" ? (
             manageConnectors ? (
-              <ApiKeyManager initialKeys={apiKeys} />
+              <ApiKeyManager
+                connectors={apiKeyConnectors.map((connector) => ({
+                  id: connector.id,
+                  name: connector.name,
+                  revokedAt: connector.revokedAt?.toISOString() ?? null,
+                  scopes: connector.scopes,
+                }))}
+                initialKeys={apiKeys}
+              />
             ) : (
-              <section className="max-w-2xl rounded-2xl border bg-background p-6">
-                <h1 className="font-heading text-2xl font-semibold">
-                  API keys require owner access
-                </h1>
-                <p className="mt-2 leading-7 text-muted-foreground">
-                  Workspace members cannot view key metadata or manage API
-                  credentials. Ask a workspace owner to make this change.
-                </p>
-              </section>
+              <RestrictedSection title="API keys" />
             )
           ) : null}
-          {view !== "overview" &&
-          view !== "connectors" &&
-          view !== "sites" &&
-          view !== "api-keys" ? (
-            <SectionEmptyState view={view} />
+          {view === "audit-log" ? (
+            auditPage && manageConnectors ? (
+              <AuditLogPanel initialPage={auditPage} />
+            ) : (
+              <RestrictedSection title="Audit log" />
+            )
           ) : null}
         </main>
       </div>
@@ -264,149 +274,83 @@ export default async function DashboardPage({
   );
 }
 
-function Overview() {
+function RestrictedSection({ title }: { title: string }) {
   return (
-    <>
-      <div className="max-w-3xl">
-        <Badge variant="outline" className="mb-3 rounded-full">
-          P0 foundation
-        </Badge>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-          Knot Cloud is online
-        </h1>
-        <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-          This build includes authenticated workspace access and connector
-          pairing controls. Publishing and API-key issuance are not released
-          yet.
-        </p>
-      </div>
-
-      <section className="mt-10 max-w-4xl border-t pt-8">
-        <h2 className="font-heading text-xl font-medium">Available now</h2>
-        <div className="mt-5 divide-y border-y">
-          {availableResources.map(({ detail, href, label, value }) => (
-            <Link
-              key={label}
-              href={href}
-              className="group grid gap-2 py-5 transition-colors hover:bg-muted/35 sm:grid-cols-[11rem_1fr_auto] sm:items-center sm:gap-6 sm:px-3"
-            >
-              <span className="font-medium">{label}</span>
-              <span className="text-sm leading-6 text-muted-foreground">
-                {detail}
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
-                {value}
-                <ArrowUpRight className="size-4" strokeWidth={1.75} />
-              </span>
-            </Link>
-          ))}
-        </div>
-      </section>
-
-      <section className="mt-10 max-w-4xl border-t pt-7">
-        <div className="flex items-start gap-3">
-          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
-          <div>
-            <h2 className="font-heading text-lg font-medium">
-              Local authority stays local
-            </h2>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-              The hosted foundation does not expose your Anytype, Heart, or
-              agent listener. Signed identity, explicit scopes, and local policy
-              remain the intended boundary for the next release.
-            </p>
-          </div>
-        </div>
-        <div className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
-          {[
-            "Signed connector identity",
-            "Explicit permission scopes",
-            "Local policy enforcement",
-          ].map((item) => (
-            <div key={item} className="flex items-center gap-2.5">
-              <Check className="size-4 text-primary" strokeWidth={1.75} />
-              <span>{item}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-    </>
+    <div className="max-w-2xl border-y py-8">
+      <h1 className="font-heading text-3xl font-semibold tracking-tight">
+        {title}
+      </h1>
+      <p className="mt-3 leading-7 text-muted-foreground">
+        Ask a workspace owner or admin to manage this section.
+      </p>
+    </div>
   );
 }
 
-const sectionCopy: Record<
-  Exclude<DashboardView, "overview" | "connectors">,
-  {
-    description: string;
-    detail: string;
-    icon: typeof Bot;
-    title: string;
-  }
-> = {
-  sites: {
-    description:
-      "Publish selected Anytype objects without exposing your local listener.",
-    detail:
-      "Public publishing routes are not part of the current P0 release. No content has been published from this workspace.",
-    icon: Globe2,
-    title: "Sites",
-  },
-  "api-keys": {
-    description: "Issue narrowly scoped credentials for the Knot data API.",
-    detail:
-      "API-key issuance is not part of the current P0 release. No credentials exist for this workspace.",
-    icon: KeyRound,
-    title: "API keys",
-  },
-  "audit-log": {
-    description: "Review security-sensitive actions across your workspace.",
-    detail:
-      "There are no released connector or publishing operations to display yet. Activity will appear here as those routes become available.",
-    icon: FileText,
-    title: "Audit log",
-  },
-};
-
-function SectionEmptyState({
-  view,
-}: {
-  view: Exclude<DashboardView, "overview" | "connectors">;
-}) {
-  const { description, detail, icon: Icon, title } = sectionCopy[view];
-
+function Overview() {
   return (
-    <div className="max-w-3xl">
-      <Badge variant="outline" className="mb-3 rounded-full">
-        P0 foundation
-      </Badge>
+    <div className="max-w-4xl">
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-        {title}
+        Connect local Knot, then choose what it can do
       </h1>
-      <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-        {description}
+      <p className="mt-3 max-w-2xl leading-7 text-muted-foreground">
+        Cloud access does not grant access to Anytype or your machine. Your
+        local Knot keeps that authority and enforces its own policy.
       </p>
-
-      <section className="mt-10 border-t pt-10">
-        <div className="grid size-11 place-items-center rounded-xl bg-accent text-accent-foreground">
-          <Icon className="size-5" strokeWidth={1.75} />
-        </div>
-        <h2 className="mt-5 font-heading text-xl font-medium">
-          Nothing to configure yet
-        </h2>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-          {detail}
-        </p>
+      <ol className="mt-9 divide-y border-y">
+        {[
+          {
+            href: "/dashboard?view=connectors",
+            label: "Pair a local connector",
+            detail:
+              "Verify its public key, choose exact scopes, and approve the request.",
+          },
+          {
+            href: "/dashboard?view=sites",
+            label: "Create a publishing site",
+            detail:
+              "Give selected publications a stable site and review their version history.",
+          },
+          {
+            href: "/dashboard?view=api-keys",
+            label: "Issue a scoped API key",
+            detail:
+              "Bind the key to known connectors, set an expiry, and keep the secret once.",
+          },
+          {
+            href: "/dashboard?view=audit-log",
+            label: "Review workspace activity",
+            detail:
+              "Filter security-sensitive actions without exposing credentials.",
+          },
+        ].map((item, index) => (
+          <li key={item.href}>
+            <Link
+              href={item.href}
+              className="group grid gap-2 py-5 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring sm:grid-cols-[2rem_14rem_1fr_auto] sm:items-center sm:gap-4"
+            >
+              <span className="font-mono text-sm text-muted-foreground">
+                {index + 1}
+              </span>
+              <span className="font-medium">{item.label}</span>
+              <span className="text-sm leading-6 text-muted-foreground">
+                {item.detail}
+              </span>
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </Link>
+          </li>
+        ))}
+      </ol>
+      <p className="mt-6 text-sm leading-6 text-muted-foreground">
+        Need the local setup steps? Read the{" "}
         <Link
-          href="https://github.com/imai-studio/knot-cloud#p0-contents"
-          className={cn(
-            buttonVariants({ variant: "outline" }),
-            "mt-6 h-10 px-4 has-data-[icon=inline-end]:pr-4",
-          )}
+          className="font-medium text-foreground underline underline-offset-4"
+          href="https://github.com/imai-studio/knot/blob/main/docs/agent-setup.md"
         >
-          View release status
-          <ArrowUpRight data-icon="inline-end" />
+          local Knot setup guide
         </Link>
-      </section>
+        .
+      </p>
     </div>
   );
 }

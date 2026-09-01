@@ -82,6 +82,28 @@ export function createHumanPublicationHandlers(input: {
       }
     },
 
+    async listPublicationVersions(request: Request, publicationId: string) {
+      try {
+        const authorized = await getAuthorizedWorkspace(request.headers);
+        if (!authorized) return authenticationProblem(request);
+        if (!z.uuid().safeParse(publicationId).success)
+          return invalidProblem(request);
+        const versions = await input.repository.listPublicationVersions({
+          tenantId: authorized.workspace.tenantId,
+          publicationId,
+        });
+        return jsonResponse(
+          versions.map((version) => ({
+            ...version,
+            createdAt: version.createdAt.toISOString(),
+            committedAt: version.committedAt?.toISOString(),
+          })),
+        );
+      } catch (error) {
+        return humanPublicationProblem(request, error);
+      }
+    },
+
     async control(request: Request, publicationId: string) {
       try {
         const authorized = await authorizeMutation(request);
