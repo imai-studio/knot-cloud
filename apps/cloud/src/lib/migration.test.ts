@@ -66,6 +66,73 @@ describe("migration plan", () => {
       "0010_scoped_data_api.sql",
     ]);
   });
+
+  it("backfills a non-authorizing actor sentinel for pre-0010 commands", async () => {
+    const database = new PGlite();
+    try {
+      await database.exec(`
+        CREATE ROLE knot_migrator LOGIN CREATEROLE NOSUPERUSER NOBYPASSRLS;
+        GRANT CREATE ON DATABASE postgres TO knot_migrator;
+        ALTER SCHEMA public OWNER TO knot_migrator;
+        GRANT knot_migrator TO CURRENT_USER;
+        SET ROLE knot_migrator;
+        CREATE TABLE schema_migrations (
+          name text PRIMARY KEY,
+          sha256 text NOT NULL,
+          applied_at timestamptz NOT NULL DEFAULT now()
+        );
+      `);
+      const migrationFiles = (await readdir(migrationDirectory))
+        .filter((name) => /^\d+.*\.sql$/u.test(name))
+        .sort();
+      for (const migrationFile of migrationFiles.filter(
+        (name) => name < "0010_scoped_data_api.sql",
+      )) {
+        await database.exec(
+          await readFile(path.join(migrationDirectory, migrationFile), "utf8"),
+        );
+      }
+      await database.exec(`
+        RESET ROLE;
+        INSERT INTO tenants (id, name) VALUES ('${tenantA}', 'Tenant A');
+        INSERT INTO connectors (
+          id, tenant_id, name, protocol_version, public_key, scopes
+        ) VALUES (
+          '${connectorA}', '${tenantA}', 'A', '1.0',
+          decode(repeat('00', 32), 'hex'), '{anytype.objects.read}'
+        );
+        INSERT INTO commands (
+          tenant_id, connector_id, required_scope, payload, not_before,
+          expires_at, idempotency_key, created_by_kind, created_by_id
+        ) VALUES (
+          '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          now(), now() + interval '1 hour', 'pre-0010-command',
+          'first-party-service', '00000000-0000-4000-8000-000000000099'
+        );
+        SET ROLE knot_migrator;
+      `);
+      await database.exec(
+        await readFile(
+          path.join(migrationDirectory, "0010_scoped_data_api.sql"),
+          "utf8",
+        ),
+      );
+      await database.exec("RESET ROLE");
+      const actor = await database.query<{
+        actor_digest: string;
+        actor_digest_version: number;
+      }>(`
+        SELECT actor_digest, actor_digest_version::int AS actor_digest_version
+        FROM commands WHERE idempotency_key = 'pre-0010-command'
+      `);
+      expect(actor.rows).toEqual([
+        { actor_digest: "0".repeat(64), actor_digest_version: 1 },
+      ]);
+    } finally {
+      await database.close();
+    }
+  });
 });
 
 describe("P0 database isolation", () => {
@@ -460,7 +527,7 @@ describe("P0 database isolation", () => {
       SET scopes = '{anytype.objects.read}'
       WHERE id = '${connectorA}';
       UPDATE api_keys
-      SET scopes = '{anytype.objects.read}', requests_per_minute = 1, requests_per_day = 10
+      SET scopes = '{anytype.objects.read}', requests_per_minute = 3, requests_per_day = 10
       WHERE id = '${apiKeyA}';
       INSERT INTO api_key_connectors (tenant_id, api_key_id, connector_id)
       VALUES ('${tenantA}', '${apiKeyA}', '${connectorA}');
@@ -515,6 +582,11 @@ describe("P0 database isolation", () => {
     ).rejects.toMatchObject({ code: "23505" });
     await expect(
       enqueue("consumer-operation-0002", "d".repeat(64)),
+    ).resolves.toMatchObject({
+      rows: [expect.objectContaining({ was_created: true })],
+    });
+    await expect(
+      enqueue("consumer-operation-0004", "f".repeat(64)),
     ).rejects.toThrow("API key quota exceeded");
     await expect(
       enqueue(
@@ -610,6 +682,7 @@ describe("P0 database isolation", () => {
       ],
     );
     const createdId = created.rows[0]!.id;
+    await database.query("SELECT set_config('app.tenant_id', '', false)");
     const resolved = await database.query<{
       id: string;
       connector_ids: string[];
@@ -621,6 +694,24 @@ describe("P0 database isolation", () => {
     expect(resolved.rows).toEqual([
       { id: createdId, connector_ids: [connectorA], requests_per_minute: 30 },
     ]);
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantA,
+    ]);
+    await database.query(
+      "DELETE FROM api_key_connectors WHERE tenant_id = $1 AND api_key_id = $2",
+      [tenantA, createdId],
+    );
+    const resolvedWithoutBindings = await database.query<{
+      connector_ids: string[];
+    }>("SELECT connector_ids FROM resolve_consumer_api_key($1)", [
+      "qrstuvwxyzABCDEF",
+    ]);
+    expect(resolvedWithoutBindings.rows).toEqual([{ connector_ids: [] }]);
+    await database.query(
+      `INSERT INTO api_key_connectors (tenant_id, api_key_id, connector_id)
+       VALUES ($1, $2, $3)`,
+      [tenantA, createdId, connectorA],
+    );
 
     await expect(
       database.query(

@@ -104,6 +104,46 @@ describe("connector command HTTP service", () => {
     expect(claim).toHaveBeenCalledTimes(1);
   });
 
+  it("maps a legacy command without actor provenance to an untrusted sentinel", async () => {
+    const claim = vi.fn<CommandLedger["claim"]>().mockResolvedValue({
+      commandId,
+      requiredScope: "anytype.objects.read",
+      payload: {
+        domain: "anytype",
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      },
+      createdByKind: "first-party-service",
+      actorDigest: null,
+      actorDigestVersion: null,
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      notBefore: new Date("2026-09-01T00:00:00Z"),
+      expiresAt: new Date("2026-09-01T00:10:00Z"),
+      attempt: 1,
+      leaseToken: "lease_token_1234567890abcdefghijklmnop",
+      leaseExpiresAt: new Date("2026-09-01T00:01:00Z"),
+    });
+    const response = await handlers(commands({ claim })).claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(200);
+    const body = commandClaimResponseSchema.parse(await response.json());
+    expect(body.commands[0]?.actor).toEqual({
+      principalDigest: "0".repeat(64),
+      digestVersion: 1,
+      provenance: "first-party-service",
+    });
+  });
+
   it("rejects claims that ask for more than one command", async () => {
     const claim = vi.fn<CommandLedger["claim"]>();
     const response = await handlers(commands({ claim })).claim(

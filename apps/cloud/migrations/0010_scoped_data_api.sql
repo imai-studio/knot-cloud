@@ -15,6 +15,17 @@ ALTER TABLE commands
     (actor_digest IS NULL) = (actor_digest_version IS NULL)
   );
 
+-- Existing commands predate authenticated actor envelopes. Preserve them with an
+-- explicit, non-authorizing sentinel so connectors can reject them by local
+-- policy instead of losing them as malformed commands during the upgrade.
+-- The table is FORCE RLS, so temporarily restore the owning migration role's
+-- normal owner bypass while performing this all-tenant data migration.
+ALTER TABLE commands NO FORCE ROW LEVEL SECURITY;
+UPDATE commands
+SET actor_digest = repeat('0', 64), actor_digest_version = 1
+WHERE actor_digest IS NULL;
+ALTER TABLE commands FORCE ROW LEVEL SECURITY;
+
 CREATE TABLE api_key_usage_windows (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   api_key_id uuid NOT NULL,
@@ -66,7 +77,11 @@ AS $$
     key.revoked_at,
     key.requests_per_minute,
     key.requests_per_day,
-    COALESCE(array_agg(binding.connector_id ORDER BY binding.connector_id), '{}'::uuid[])
+    COALESCE(
+      array_agg(binding.connector_id ORDER BY binding.connector_id)
+        FILTER (WHERE binding.connector_id IS NOT NULL),
+      '{}'::uuid[]
+    )
   FROM public.api_keys AS key
   LEFT JOIN public.api_key_connectors AS binding
     ON binding.tenant_id = key.tenant_id AND binding.api_key_id = key.id
@@ -80,6 +95,8 @@ GRANT EXECUTE ON FUNCTION resolve_consumer_api_key(text) TO knot_app;
 GRANT knot_resolver TO CURRENT_USER;
 GRANT CREATE ON SCHEMA public TO knot_resolver;
 GRANT SELECT ON api_key_connectors TO knot_resolver;
+CREATE POLICY resolver_select ON api_key_connectors
+  FOR SELECT TO knot_resolver USING (true);
 ALTER FUNCTION resolve_consumer_api_key(text) OWNER TO knot_resolver;
 REVOKE CREATE ON SCHEMA public FROM knot_resolver;
 REVOKE knot_resolver FROM CURRENT_USER GRANTED BY CURRENT_USER;
@@ -265,9 +282,9 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Tenant context mismatch';
   END IF;
   IF p_idempotency_key IS NULL OR char_length(p_idempotency_key) NOT BETWEEN 16 AND 200
-    OR p_request_sha256 !~ '^[a-f0-9]{64}$'
-    OR p_actor_digest !~ '^[a-f0-9]{64}$'
-    OR p_actor_digest_version < 1
+    OR p_request_sha256 IS NULL OR p_request_sha256 !~ '^[a-f0-9]{64}$'
+    OR p_actor_digest IS NULL OR p_actor_digest !~ '^[a-f0-9]{64}$'
+    OR p_actor_digest_version IS NULL OR p_actor_digest_version < 1
   THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Invalid operation metadata';
   END IF;
@@ -306,28 +323,6 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Connector binding denied';
   END IF;
 
-  SELECT record.request_sha256, command.id, command.state
-  INTO existing_request_sha256, existing_command_id, existing_command_state
-  FROM idempotency_records AS record
-  JOIN commands AS command
-    ON command.tenant_id = record.tenant_id
-    AND command.created_by_kind = record.credential_kind
-    AND command.created_by_id = record.credential_id
-    AND command.idempotency_key = record.idempotency_key
-  WHERE record.tenant_id = p_tenant_id
-    AND record.credential_kind = 'consumer-api-key'
-    AND record.credential_id = p_api_key_id
-    AND record.idempotency_key = p_idempotency_key
-    AND record.expires_at > clock_timestamp();
-
-  IF FOUND THEN
-    IF existing_request_sha256 <> p_request_sha256 THEN
-      RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'Idempotency key payload mismatch';
-    END IF;
-    RETURN QUERY SELECT existing_command_id, existing_command_state, false;
-    RETURN;
-  END IF;
-
   INSERT INTO api_key_usage_windows (
     tenant_id, api_key_id, window_kind, window_started_at, request_count, expires_at
   ) VALUES (
@@ -350,6 +345,28 @@ BEGIN
 
   IF minute_count > key_record.requests_per_minute OR day_count > key_record.requests_per_day THEN
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'API key quota exceeded';
+  END IF;
+
+  SELECT record.request_sha256, command.id, command.state
+  INTO existing_request_sha256, existing_command_id, existing_command_state
+  FROM idempotency_records AS record
+  JOIN commands AS command
+    ON command.tenant_id = record.tenant_id
+    AND command.created_by_kind = record.credential_kind
+    AND command.created_by_id = record.credential_id
+    AND command.idempotency_key = record.idempotency_key
+  WHERE record.tenant_id = p_tenant_id
+    AND record.credential_kind = 'consumer-api-key'
+    AND record.credential_id = p_api_key_id
+    AND record.idempotency_key = p_idempotency_key
+    AND record.expires_at > clock_timestamp();
+
+  IF FOUND THEN
+    IF existing_request_sha256 <> p_request_sha256 THEN
+      RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'Idempotency key payload mismatch';
+    END IF;
+    RETURN QUERY SELECT existing_command_id, existing_command_state, false;
+    RETURN;
   END IF;
 
   INSERT INTO commands (

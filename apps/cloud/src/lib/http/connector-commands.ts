@@ -33,6 +33,8 @@ import { HttpProblem, jsonResponse, problemResponse } from "./problem";
 
 const maximumControlBodyBytes = 64 * 1024;
 const maximumResultBodyBytes = 1024 * 1024;
+const unverifiedLegacyActorDigest = "0".repeat(64);
+const unverifiedLegacyActorDigestVersion = 1;
 
 type AuthenticatedConnector = {
   connectorId: string;
@@ -274,8 +276,15 @@ export function createConnectorCommandHandlers(
                   requiredScope: command.requiredScope,
                   createdBy: command.createdByKind,
                   actor: {
-                    principalDigest: command.actorDigest,
-                    digestVersion: command.actorDigestVersion,
+                    // Commands created before actor provenance was recorded are
+                    // deliberately mapped to a sentinel that no local allowlist
+                    // should trust. This keeps the envelope valid while failing
+                    // closed at the connector policy boundary.
+                    principalDigest:
+                      command.actorDigest ?? unverifiedLegacyActorDigest,
+                    digestVersion:
+                      command.actorDigestVersion ??
+                      unverifiedLegacyActorDigestVersion,
                     provenance:
                       command.createdByKind === "human-session"
                         ? "authenticated-cloud-session"

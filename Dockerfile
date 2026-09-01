@@ -35,6 +35,7 @@ ENV PORT=3000
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
 COPY --from=builder --chown=nextjs:nodejs /workspace/apps/cloud/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /workspace/apps/cloud/.next/static ./apps/cloud/.next/static
+COPY --from=builder --chown=nextjs:nodejs /workspace/apps/cloud/public ./apps/cloud/public
 USER nextjs
 EXPOSE 3000
 CMD ["node", "apps/cloud/server.js"]

@@ -314,7 +314,7 @@ function mapDatabaseError(error: unknown): Error {
   if (code === "P0001" && message.includes("quota exceeded")) {
     return new ConsumerDataError("quota-exceeded", "API key quota exceeded");
   }
-  if (code === "23505" && message.includes("Idempotency")) {
+  if (code === "23505") {
     return new ConsumerDataError(
       "idempotency-conflict",
       "The idempotency key was used for another request",
