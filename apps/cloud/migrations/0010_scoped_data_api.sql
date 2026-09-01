@@ -67,14 +67,15 @@ AS $$
   GROUP BY key.id
 $$;
 
+REVOKE ALL ON FUNCTION resolve_consumer_api_key(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION resolve_consumer_api_key(text) TO knot_app;
+
 GRANT knot_resolver TO CURRENT_USER;
 GRANT CREATE ON SCHEMA public TO knot_resolver;
 GRANT SELECT ON api_key_connectors TO knot_resolver;
 ALTER FUNCTION resolve_consumer_api_key(text) OWNER TO knot_resolver;
-REVOKE knot_resolver FROM CURRENT_USER;
 REVOKE CREATE ON SCHEMA public FROM knot_resolver;
-REVOKE ALL ON FUNCTION resolve_consumer_api_key(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION resolve_consumer_api_key(text) TO knot_app;
+REVOKE knot_resolver FROM CURRENT_USER GRANTED BY CURRENT_USER;
 
 CREATE FUNCTION create_consumer_api_key(
   p_tenant_id uuid,
