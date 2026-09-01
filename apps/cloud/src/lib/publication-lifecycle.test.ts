@@ -20,6 +20,7 @@ const versionA2 = "10000000-0000-4000-8000-000000000042";
 const versionB1 = "10000000-0000-4000-8000-000000000043";
 const assetA = "10000000-0000-4000-8000-000000000051";
 const uploadA = "10000000-0000-4000-8000-000000000061";
+const userA = "10000000-0000-4000-8000-000000000071";
 const assetBytes = new TextEncoder().encode("verified asset");
 const assetDigest = createHash("sha256").update(assetBytes).digest("hex");
 const document = { schemaVersion: "1.0", title: "Page", blocks: [] };
@@ -303,6 +304,55 @@ describe("publication lifecycle migration", () => {
     expect(pending.rows.map((row) => row.pathname)).toContain(
       assetPath(tenantA, assetDigest),
     );
+  });
+
+  it("records human publication controls in the same transaction", async () => {
+    await verifyAsset();
+    const bundleDigest = digestDocument(document);
+    await prepareVersion(versionA1, bundleDigest, "create");
+    await commitVersion(versionA1);
+
+    const controlled = await database.query<{ result: unknown }>(
+      `SELECT control_publication_as_human(
+        $1, $2, $3, 'publication.disable', NULL
+      ) AS result`,
+      [tenantA, userA, publicationA],
+    );
+    expect(controlled.rows[0]?.result).toMatchObject({
+      type: "publication.disable",
+      publicationId: publicationA,
+    });
+    const audit = await database.query<{
+      principal_kind: string;
+      principal_id: string;
+      action: string;
+      target_id: string;
+      outcome: string;
+    }>(
+      `SELECT principal_kind,principal_id,action,target_id,outcome
+       FROM audit_events
+       WHERE tenant_id = $1 AND principal_id = $2`,
+      [tenantA, userA],
+    );
+    expect(audit.rows).toEqual([
+      {
+        principal_kind: "human-session",
+        principal_id: userA,
+        action: "publication.disable",
+        target_id: publicationA,
+        outcome: "succeeded",
+      },
+    ]);
+
+    const secondDocument = { ...document, title: "Published again" };
+    await prepareVersion(
+      versionA2,
+      digestDocument(secondDocument),
+      "update",
+      secondDocument,
+    );
+    await commitVersion(versionA2);
+    await expect(activeVersion()).resolves.toBe(versionA2);
   });
 
   it("fences deletion attempts, retries safely, and finalizes after all objects delete", async () => {

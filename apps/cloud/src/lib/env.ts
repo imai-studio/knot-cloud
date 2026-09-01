@@ -29,6 +29,7 @@ const coreEnvironmentSchema = z.object({
     .min(1)
     .max(1_000)
     .default(50),
+  DOMAIN_CHALLENGE_SECRET: optionalNonEmptyString(32),
 });
 
 const appBaseUrlSchema = z.url();
@@ -243,6 +244,14 @@ export function getWebhookDestinations(): ReadonlyMap<
 
 export function getWebhookMaxActiveSubscriptions(): number {
   return getCloudEnvironment().WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS;
+}
+
+export function getDomainChallengeSecret(): string {
+  const secret = getCloudEnvironment().DOMAIN_CHALLENGE_SECRET;
+  if (!secret) {
+    throw new Error("Custom domain verification is not configured");
+  }
+  return secret;
 }
 
 export function getR2Environment() {

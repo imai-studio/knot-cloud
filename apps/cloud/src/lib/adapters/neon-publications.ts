@@ -335,6 +335,31 @@ export class NeonPublicationRepository implements PublicationRepository {
       ReturnType<PublicationRepository["controlAsConnector"]>
     >;
   }
+
+  async controlAsHuman(
+    input: Parameters<NonNullable<PublicationRepository["controlAsHuman"]>>[0],
+  ) {
+    const versionId =
+      input.operation.type === "publication.rollback"
+        ? input.operation.versionId
+        : null;
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT control_publication_as_human(
+          ${input.tenantId}::uuid,
+          ${input.userId}::uuid,
+          ${input.operation.publicationId}::uuid,
+          ${input.operation.type},
+          ${versionId}::uuid
+        ) AS result
+      `,
+    ]);
+    const row = rows[0] as { result: unknown } | undefined;
+    if (!row) throw new Error("Human publication control returned no state");
+    return row.result as Awaited<
+      ReturnType<NonNullable<PublicationRepository["controlAsHuman"]>>
+    >;
+  }
 }
 
 export class NeonDeletionOutboxRepository implements DeletionOutboxRepository {

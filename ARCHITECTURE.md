@@ -82,6 +82,32 @@ Public publishing cannot ship until the domain is recorded, DNS and cookies are 
 renderer passes its CSP and cross-origin browser tests. The candidate routes return `404` while
 `CONTENT_BASE_URL` is absent or does not match the request origin.
 
+## Platform extension candidate
+
+An unreleased stacked branch adds custom-domain verification state, authenticated readers, and
+database-enforced platform limits. It does not edit DNS or enable hosted execution.
+
+```mermaid
+flowchart LR
+  Owner[Owner or admin] -->|same-origin session| Console[Knot console]
+  Console --> Policy[(Tenant RLS: sites, domains, grants, limits)]
+  Console -->|TXT lookup only| DNS[Operator-controlled DNS]
+  Reader[Reader browser] --> Content[Reader origin or verified custom host]
+  Content -->|grant exchange| Session[(Digest-only reader session)]
+  Content --> Resolver[Narrow knot_resolver functions]
+  Resolver --> Policy
+  Resolver --> Publications[(Active publication state)]
+  Resolver --> R2[(Private R2)]
+```
+
+Grant exchange consumes a bounded redemption under a row lock and requires the requested site to
+match before it consumes the grant. Reader cookies are host-only, site-specific, `HttpOnly`, and
+`SameSite=Lax`; they grant no dashboard or data API authority. Authenticated responses are private
+and `no-store` at browser and CDN layers. Revoking a grant revokes its sessions. Typed provider
+boundaries for billing, media derivatives, and hosted connectors remain unavailable until their
+external provider, licensing, isolation, KMS, and recovery requirements are implemented. See
+[`docs/platform-extensions.md`](docs/platform-extensions.md).
+
 ## Self-hosting boundary
 
 The standalone Next.js image supports self-hosting. The repository has provider boundaries for

@@ -5,21 +5,27 @@ an isolated origin. That origin must use a different registrable domain from `AP
 subdomain such as `pages.knot.imai.tech` is not sufficient when the console is on
 `knot.imai.tech`.
 
-Reader URLs have two forms:
+Fixed-origin reader URLs use these forms:
 
 ```text
 https://<content-origin>/p/<site-slug>/<publication-slug>
 https://<content-origin>/media/<site-slug>/<publication-id>/<sha256>
+https://<content-origin>/access/<site-slug>
 ```
+
+A verified custom hostname serves publication slugs from its root and uses the same `/media/*` and
+`/access/*` paths. The hostname-to-site mapping is checked again in every route handler.
 
 The page route renders only the versioned document schema. It does not accept HTML, scripts,
 styles, embeds, or arbitrary URLs. Media is read from the private object store only after the
 database confirms that the digest belongs to the current active version. Pages and media are
-checked again before the response starts. Pages use `Cache-Control: no-store`. Digest-addressed
-media uses `Cache-Control: public, max-age=0, must-revalidate` plus a digest ETag: browsers may keep
-the immutable bytes but must revalidate visibility before every reuse. A matching conditional
-request returns `304` only after the active-version lookup succeeds, so disable and unpublish take
-effect immediately without downloading and hashing the R2 object again.
+checked again before the response starts. Public pages use `Cache-Control: no-store`. Public
+digest-addressed media uses `Cache-Control: public, max-age=0, must-revalidate` plus a digest ETag:
+browsers may keep the immutable bytes but must revalidate visibility before every reuse.
+Authenticated pages and media instead use `private, no-store`, `Vary: Cookie`, and explicit CDN
+no-store headers. A matching public conditional request returns `304` only after the active-version
+lookup succeeds, so disable and unpublish take effect immediately without downloading and hashing
+the R2 object again.
 
 ## Vercel
 
@@ -30,10 +36,12 @@ Use the existing Vercel project with two domains:
 3. Set `CONTENT_BASE_URL` to the content origin.
 4. Do not configure a public R2 URL or R2 custom domain.
 
-The application proxy allows only `/p/*` and `/media/*` on `CONTENT_BASE_URL`. It returns `404` for
-the dashboard, authentication, API, Next.js asset, and public-file paths on that origin. The reader
-handlers also compare the request origin with `CONTENT_BASE_URL`, so reader paths return `404` on
-the console origin.
+The application proxy allows `/p/*`, `/media/*`, `/access/*`, the exact reader-session endpoint,
+and immutable Next.js static assets on `CONTENT_BASE_URL`. It returns `404` for the dashboard,
+control-plane authentication and API routes, and public-file paths on that origin. The console
+origin rejects every reader-only route. Potential custom hosts reach only reader surfaces; each
+reader handler then requires a verified hostname mapping for the exact requested site. Missing or
+invalid `CONTENT_BASE_URL` configuration makes fixed-origin and custom-host readers return `404`.
 
 Before promotion, verify both directions:
 
@@ -43,10 +51,11 @@ curl -i https://<console-origin>/p/example/page
 curl -i https://<content-origin>/p/example/page
 ```
 
-The first two requests must return `404`. The third must return either the active page or `404`; it
-must never redirect to sign-in or set a cookie. Inspect the page and media responses for the CSP,
-`nosniff`, same-origin resource policy, no-referrer policy, page `no-store`, and media
-`must-revalidate` cache policy.
+The first two requests must return `404`. The third must return either the active page, the reader
+grant form for an authenticated site, or `404`; it must never redirect to dashboard sign-in or set
+a dashboard cookie. Inspect the page and media responses for the CSP, `nosniff`, same-origin
+resource policy, no-referrer policy, public page `no-store`, public media `must-revalidate`, and
+authenticated `private, no-store` plus `Vary: Cookie` policies.
 
 ## Self-hosting
 
