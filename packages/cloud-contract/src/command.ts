@@ -35,6 +35,21 @@ export const commandPayloadSchema = z.discriminatedUnion("domain", [
   }),
 ]);
 
+export const commandActorProvenanceSchema = z.enum([
+  "authenticated-cloud-session",
+  "connector-key",
+  "consumer-api-key",
+  "first-party-service",
+]);
+
+export const commandActorSchema = z
+  .object({
+    principalDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    digestVersion: z.number().int().positive(),
+    provenance: commandActorProvenanceSchema,
+  })
+  .strict();
+
 export const commandEnvelopeSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
@@ -42,6 +57,7 @@ export const commandEnvelopeSchema = z
     connectorId: opaqueIdSchema,
     requiredScope: scopeNameSchema,
     createdBy: principalKindSchema,
+    actor: commandActorSchema,
     createdAt: unixSecondsSchema,
     notBefore: unixSecondsSchema,
     expiresAt: unixSecondsSchema,
@@ -74,6 +90,17 @@ export const commandEnvelopeSchema = z
       context.addIssue({
         code: "custom",
         message: `Command requires ${expectedScope}`,
+      });
+    }
+    const expectedProvenance =
+      value.createdBy === "human-session"
+        ? "authenticated-cloud-session"
+        : value.createdBy;
+    if (value.actor.provenance !== expectedProvenance) {
+      context.addIssue({
+        code: "custom",
+        path: ["actor", "provenance"],
+        message: `Command actor provenance must be ${expectedProvenance}`,
       });
     }
   });

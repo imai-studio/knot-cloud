@@ -543,6 +543,18 @@ describe("P0 database isolation", () => {
       },
     ]);
 
+    const commandActor = await database.query<{
+      actor_digest: string;
+      actor_digest_version: number;
+    }>(
+      `SELECT actor_digest, actor_digest_version::int AS actor_digest_version
+       FROM commands WHERE tenant_id = $1 AND id = $2`,
+      [tenantA, first.rows[0]!.command_id],
+    );
+    expect(commandActor.rows).toEqual([
+      { actor_digest: "a".repeat(64), actor_digest_version: 1 },
+    ]);
+
     await database.query("SELECT set_config('app.tenant_id', $1, false)", [
       tenantB,
     ]);
