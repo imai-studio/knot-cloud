@@ -44,13 +44,13 @@ round trip. No released request path stores a user publication in R2.
 ## Publication implementation candidate
 
 The repository contains an unreleased publication lifecycle. It depends on tenant bootstrap,
-connector pairing, signed requests, replay storage, and private R2. Postgres remains authoritative.
+connector pairing, signed requests, durable replay claims, and private R2. Postgres remains authoritative.
 
 ```mermaid
 flowchart LR
   Local[Local Knot connector] -->|signed requests| App[Knot Cloud]
   App --> Commands[(Commands in Neon)]
-  App --> Nonces[Replay nonce store]
+  App --> Nonces[(Durable nonces in Neon)]
   Browser[Operator browser] --> App
   App --> Publications[(Publication state in Neon)]
   App --> R2[(Private Cloudflare R2)]
@@ -60,7 +60,8 @@ flowchart LR
 ```
 
 The connector generates an Ed25519 key and keeps the private key locally. Knot Cloud stores the
-public key and accepts only signed connector requests. A request must claim a nonce before a
+public key and accepts only signed connector requests. A request must claim a transactionally
+unique Postgres nonce before a
 mutation proceeds. Postgres stores commands, attempts, leases, publication pointers, tombstones,
 and the deletion outbox. Queues and scheduled jobs may start work, but they cannot hold the only
 copy of authoritative state.
@@ -111,9 +112,10 @@ external provider, licensing, isolation, KMS, and recovery requirements are impl
 ## Self-hosting boundary
 
 The standalone Next.js image supports self-hosting. The repository has provider boundaries for
-Neon, Cloudflare R2, and Upstash. Only the R2 object-store adapter is implemented. It uses
-R2-specific endpoint configuration through the S3 protocol. A general S3-compatible adapter and a
-second replay-store adapter remain planned.
+Neon, Cloudflare R2, and Upstash. The R2 object-store adapter uses R2-specific endpoint
+configuration through the S3 protocol. Replay correctness remains Postgres-backed in every
+deployment; Upstash is only a rate-limit adapter. A general S3-compatible object-store adapter
+remains planned.
 
 Self-hosters must preserve the same trust boundaries. The runtime database role cannot own tables
 or bypass row-level security. Object storage stays private. Public content uses a different

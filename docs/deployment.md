@@ -55,7 +55,7 @@ pnpm --filter @imai/knot-cloud smoke:providers
 ```
 
 The smoke test rejects an elevated database runtime role. It also writes, verifies, and removes one
-private tenant-scoped R2 object. Run it against the exact Neon, R2, and replay-store credentials
+private tenant-scoped R2 object. Run it against the exact Neon, R2, and rate-limit credentials
 configured for the candidate before promotion.
 
 For publication candidates, also exercise the real presigned-upload path against the candidate R2
@@ -90,3 +90,30 @@ For a publication candidate, also run the origin-isolation, CSP, cookie, page, m
 rollback, destructive-unpublish, and deletion-drain checks in
 [`public-reader.md`](public-reader.md). Do not record P3 as released until those checks pass on the
 selected content domain.
+
+## Managed Neon RLS probe
+
+Run this with the exact production `knot_app` credential before promotion, never the migration
+owner. The first query must report `off`, `on`, `false`; every listed relation must report both RLS
+columns as `true`; and the final query must return `0` without setting `app.tenant_id`.
+
+```sql
+SELECT current_setting('is_superuser') AS superuser,
+       current_setting('row_security') AS row_security,
+       (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypasses_rls;
+
+SELECT relname, relrowsecurity, relforcerowsecurity
+FROM pg_class
+WHERE relname IN (
+  'webhook_subscriptions', 'transactional_events', 'webhook_deliveries',
+  'tenant_platform_limits', 'custom_domains', 'reader_grants', 'reader_sessions',
+  'media_derivative_jobs', 'connector_request_nonces'
+)
+ORDER BY relname;
+
+SELECT set_config('app.tenant_id', '', false);
+SELECT count(*) FROM connector_request_nonces;
+```
+
+Record only the booleans and row count. Never paste the connection URL or tenant data into a
+ticket, build log, or model prompt.

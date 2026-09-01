@@ -101,4 +101,28 @@ describe("reader-origin proxy", () => {
       ).toBe(404);
     }
   });
+
+  it("rejects Vercel preview aliases with cache-bypass headers", () => {
+    process.env.CONTENT_BASE_URL = "https://pages.example.org";
+    process.env.APP_BASE_URL = "https://knot.imai.tech";
+    const response = proxy(
+      new NextRequest("https://knot-git-main-imai.vercel.app/p/demo/guide"),
+    );
+    expect(response?.status).toBe(404);
+    expect(response?.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
+    );
+    expect(
+      proxy(
+        new NextRequest("https://knot-git-main-imai.vercel.app/api/health"),
+      ),
+    ).toBeUndefined();
+    expect(
+      proxy(
+        new NextRequest(
+          "https://knot-git-main-imai.vercel.app/api/internal/publications/maintenance",
+        ),
+      ),
+    ).toBeUndefined();
+  });
 });

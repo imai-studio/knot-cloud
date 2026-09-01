@@ -83,6 +83,32 @@ describe("problem response", () => {
     expect(error.mock.calls[0]?.[0]).not.toContain(
       "secret provider diagnostic",
     );
+    expect(JSON.stringify(body)).not.toContain("secret provider diagnostic");
+    error.mockRestore();
+  });
+
+  it("never logs or returns request bodies, signatures, or key paths", async () => {
+    const sensitive = [
+      '{"document":{"title":"private"}}',
+      "Knot-Signature: secret-signature",
+      "/Users/operator/.knot/connector-key.pem",
+      '{"rawCloudBody":"provider payload"}',
+    ];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = problemResponse({
+      problemBaseUrl: "https://trusted.knot.test",
+      status: 500,
+      code: "internal-error",
+      title: "Operation failed",
+      detail: sensitive.join("\n"),
+      logEvent: "connector-command-internal-error",
+    });
+    const serializedLog = error.mock.calls.flat().join("\n");
+    const serializedResponse = await response.text();
+    for (const value of sensitive) {
+      expect(serializedLog).not.toContain(value);
+      expect(serializedResponse).not.toContain(value);
+    }
     error.mockRestore();
   });
 });

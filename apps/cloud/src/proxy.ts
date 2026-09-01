@@ -21,6 +21,11 @@ export function proxy(request: NextRequest): Response | undefined {
       ? undefined
       : isolatedNotFound();
   }
+  if (request.nextUrl.hostname.toLowerCase().endsWith(".vercel.app")) {
+    // Vercel deployment aliases remain usable for control-plane previews and
+    // scheduled maintenance, but never become reader origins.
+    return isFixedReaderPath ? isolatedNotFound() : undefined;
+  }
   if (
     request.nextUrl.protocol !== "https:" ||
     request.nextUrl.port ||
@@ -62,11 +67,14 @@ function isolatedNotFound(): Response {
     status: 404,
     headers: {
       "Cache-Control": "no-store, max-age=0",
+      "CDN-Cache-Control": "no-store",
+      "Cloudflare-CDN-Cache-Control": "no-store",
       "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
       "Content-Type": "text/plain; charset=utf-8",
       "Cross-Origin-Resource-Policy": "same-origin",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
+      "Vercel-CDN-Cache-Control": "no-store",
     },
   });
 }

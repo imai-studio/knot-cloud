@@ -34,8 +34,19 @@ for (const name of required) {
   }
 }
 validateContentOrigin(process.env.APP_BASE_URL, process.env.CONTENT_BASE_URL);
-if ((process.env.REPLAY_STORE_DRIVER ?? "upstash") !== "upstash") {
-  throw new Error("REPLAY_STORE_DRIVER must be upstash for this deployment");
+if (
+  !["postgres", "upstash"].includes(
+    process.env.REPLAY_STORE_DRIVER ?? "postgres",
+  )
+) {
+  throw new Error("REPLAY_STORE_DRIVER must be postgres or legacy upstash");
+}
+if (
+  (process.env.CONNECTOR_RATE_LIMIT_STORE_DRIVER ?? "upstash") !== "upstash"
+) {
+  throw new Error(
+    "CONNECTOR_RATE_LIMIT_STORE_DRIVER must be upstash for this deployment",
+  );
 }
 
 const explicitUpstash =
@@ -98,6 +109,15 @@ if (
   throw new Error(
     "The exact command-ledger procedure signatures from migration 0007 are required",
   );
+}
+
+const replayProcedures = await database`
+  SELECT to_regprocedure(
+    'claim_connector_request_nonce(uuid,uuid,text,timestamp with time zone)'
+  ) IS NOT NULL AS durable_nonce_claim
+`;
+if (!replayProcedures[0]?.durable_nonce_claim) {
+  throw new Error("The durable Postgres connector nonce procedure is required");
 }
 
 const redis = new Redis({
@@ -182,7 +202,7 @@ try {
 }
 
 console.log(
-  "Neon role and command procedures, Upstash, and R2 object round-trip verified.",
+  "Neon role, command and durable nonce procedures, Upstash rate limiting, and R2 object round-trip verified.",
 );
 
 function hasEnvironmentValue(name) {

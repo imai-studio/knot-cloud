@@ -73,6 +73,8 @@ key with a different origin or event fails. A replay does not consume another AP
 New events use the API key's durable per-minute and per-day limits. Delivery claims use a lease
 fence, bounded exponential backoff, at most ten attempts, and a terminal dead-letter state. The
 maintenance route only drives this durable outbox; it is not another workflow scheduler.
+Neither webhook delivery nor a Cloud session can approve or modify a workflow or satisfy a local
+management-authority check.
 
 ## Delivery verification
 
