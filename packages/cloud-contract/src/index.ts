@@ -3,6 +3,7 @@ export * from "./asset-upload.js";
 export * from "./canonical-json.js";
 export * from "./command.js";
 export * from "./compatibility.js";
+export * from "./consumer-api-key.js";
 export * from "./credential-policy.js";
 export * from "./idempotency.js";
 export * from "./identifiers.js";
