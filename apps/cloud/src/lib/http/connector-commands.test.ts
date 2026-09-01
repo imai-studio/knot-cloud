@@ -73,7 +73,7 @@ describe("connector command HTTP service", () => {
     const response = await handlers(commands({ claim })).claim(
       request(`/api/v1/connectors/${connectorId}/commands/claim`, {
         protocolVersion: "1.0",
-        maximumCommands: 2,
+        maximumCommands: 1,
         leaseSeconds: 60,
       }),
       connectorId,
@@ -90,6 +90,24 @@ describe("connector command HTTP service", () => {
       leaseSeconds: 60,
     });
     expect(claim).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects claims that ask for more than one command", async () => {
+    const claim = vi.fn<CommandLedger["claim"]>();
+    const response = await handlers(commands({ claim })).claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 2,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(problemDetailsSchema.parse(await response.json()).code).toBe(
+      "invalid-request",
+    );
+    expect(claim).not.toHaveBeenCalled();
   });
 
   it("fails a malformed claimed command without stranding its lease", async () => {
@@ -274,5 +292,33 @@ describe("connector command HTTP service", () => {
 
     expect(response.status).toBe(200);
     expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("maps database parameter validation to an unprocessable result", async () => {
+    const databaseError = Object.assign(new Error("result type mismatch"), {
+      code: "22023",
+    });
+    const complete = vi
+      .fn<CommandLedger["complete"]>()
+      .mockRejectedValue(databaseError);
+    const response = await handlers(commands({ complete })).complete(
+      request(`/api/v1/connectors/${connectorId}/commands/result`, {
+        protocolVersion: "1.0",
+        commandId,
+        attempt: 1,
+        leaseToken: "lease_token_1234567890abcdefghijklmnop",
+        result: {
+          outcome: "rejected-by-local-policy",
+          reasonCode: "operator-approval-required",
+        },
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(422);
+    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      code: "invalid-request",
+      retryable: false,
+    });
   });
 });

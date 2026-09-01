@@ -115,7 +115,7 @@ export const commandResultSchema = z.discriminatedUnion("outcome", [
 export const commandClaimRequestSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    maximumCommands: z.number().int().min(1).max(10).default(1),
+    maximumCommands: z.literal(1).default(1),
     leaseSeconds: z.number().int().min(15).max(300).default(60),
   })
   .strict();
@@ -123,7 +123,7 @@ export const commandClaimRequestSchema = z
 export const commandClaimResponseSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commands: z.array(commandEnvelopeSchema).max(10),
+    commands: z.array(commandEnvelopeSchema).max(1),
     pollAfterSeconds: z.number().int().min(1).max(300),
   })
   .strict();

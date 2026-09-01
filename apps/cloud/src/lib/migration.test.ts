@@ -284,6 +284,162 @@ describe("P0 database isolation", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("completes failed and rejected attempts with SQL NULL results", async () => {
+    const failedCommand = "00000000-0000-4000-8000-000000000052";
+    const rejectedCommand = "00000000-0000-4000-8000-000000000053";
+    const invalidDelayCommand = "00000000-0000-4000-8000-000000000054";
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload,
+        not_before, expires_at, idempotency_key, created_by_kind, created_by_id,
+        created_at, updated_at
+      ) VALUES
+        (
+          '${failedCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'failed-completion-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        ),
+        (
+          '${rejectedCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'rejected-completion-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        ),
+        (
+          '${invalidDelayCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'invalid-delay-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+
+    const failedDigest = "d".repeat(64);
+    const rejectedDigest = "e".repeat(64);
+    const invalidDelayDigest = "f".repeat(64);
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:03Z",
+        failedDigest,
+        30,
+      ],
+    );
+    const failed = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5, 'failed', NULL, 'temporary-read-failure', true, 30
+      )`,
+      [
+        tenantA,
+        connectorA,
+        failedCommand,
+        "2026-09-01T00:00:04Z",
+        failedDigest,
+      ],
+    );
+    expect(failed.rows).toEqual([
+      { completion_status: "accepted", command_state: "pending" },
+    ]);
+
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:05Z",
+        rejectedDigest,
+        30,
+      ],
+    );
+    const rejected = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5,
+        'rejected-by-local-policy', NULL, 'operator-approval-required', false, 0
+      )`,
+      [
+        tenantA,
+        connectorA,
+        rejectedCommand,
+        "2026-09-01T00:00:06Z",
+        rejectedDigest,
+      ],
+    );
+    expect(rejected.rows).toEqual([
+      {
+        completion_status: "accepted",
+        command_state: "rejected-by-local-policy",
+      },
+    ]);
+
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:07Z",
+        invalidDelayDigest,
+        30,
+      ],
+    );
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, 'failed', NULL, 'temporary-read-failure', true, NULL
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toThrow("Retry delay is out of range");
+
+    const persisted = await database.query<{
+      id: string;
+      state: string;
+      result: unknown;
+      error_code: string | null;
+    }>(
+      `SELECT id, state, result, error_code
+       FROM commands
+       WHERE id IN ($1, $2)
+       ORDER BY id`,
+      [failedCommand, rejectedCommand],
+    );
+    expect(persisted.rows).toEqual([
+      {
+        id: failedCommand,
+        state: "pending",
+        result: null,
+        error_code: "temporary-read-failure",
+      },
+      {
+        id: rejectedCommand,
+        state: "rejected-by-local-policy",
+        result: null,
+        error_code: "operator-approval-required",
+      },
+    ]);
+  });
+
   it("fences stale command results and records every claimed attempt", async () => {
     const command = "00000000-0000-4000-8000-000000000051";
     const firstDigest = "a".repeat(64);
@@ -436,13 +592,30 @@ describe("P0 database isolation", () => {
       database.query(
         `SELECT * FROM complete_command(
           $1, $2, $3, $4, $5, $6, 'succeeded',
+          jsonb_build_object('type', 'object.read', 'data', repeat('x', 1048576)),
+          NULL, false, 0
+        )`,
+        [tenantA, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Command result exceeds the size limit"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, $4, $5, $6, 'succeeded',
           '{"type":"object.update"}', NULL, false, 0
         )`,
         [tenantA, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
       ),
-    ).rejects.toThrow(
-      "Command result type does not match the leased operation",
-    );
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining(
+        "Command result type does not match the leased operation",
+      ),
+    });
 
     const acceptedResult = await database.query<{
       completion_status: string;

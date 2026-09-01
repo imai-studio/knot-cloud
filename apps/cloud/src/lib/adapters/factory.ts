@@ -1,7 +1,11 @@
 import { UpstashReplayNonceStore } from "./upstash-replay";
 import { R2PrivateObjectStore } from "./r2";
 
-import type { ObjectStore, ReplayNonceStore } from "@/lib/ports";
+import type {
+  ConnectorRateLimitStore,
+  ObjectStore,
+  ReplayNonceStore,
+} from "@/lib/ports";
 
 let objectStore: ObjectStore | undefined;
 
@@ -11,7 +15,8 @@ export function createObjectStore(): ObjectStore {
   throw new Error(`Unsupported OBJECT_STORE_DRIVER: ${driver}`);
 }
 
-export function createReplayNonceStore(): ReplayNonceStore {
+export function createReplayNonceStore(): ReplayNonceStore &
+  ConnectorRateLimitStore {
   const driver = process.env.REPLAY_STORE_DRIVER ?? "upstash";
   if (driver === "upstash") return new UpstashReplayNonceStore();
   throw new Error(`Unsupported REPLAY_STORE_DRIVER: ${driver}`);

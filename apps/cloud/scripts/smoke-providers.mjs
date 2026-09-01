@@ -7,6 +7,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { neon } from "@neondatabase/serverless";
+import { Redis } from "@upstash/redis";
 
 const required = [
   "APP_BASE_URL",
@@ -24,12 +25,17 @@ const required = [
   "R2_BUCKET_NAME",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
+  "UPSTASH_REDIS_REST_URL",
+  "UPSTASH_REDIS_REST_TOKEN",
 ];
 
 for (const name of required) {
   if (!process.env[name] || process.env[name] === "[SENSITIVE]") {
     throw new Error(`${name} is required`);
   }
+}
+if ((process.env.REPLAY_STORE_DRIVER ?? "upstash") !== "upstash") {
+  throw new Error("REPLAY_STORE_DRIVER must be upstash for this deployment");
 }
 
 const database = neon(process.env.DATABASE_URL);
@@ -59,6 +65,14 @@ if (
   role.has_role_membership
 ) {
   throw new Error("DATABASE_URL is not using the restricted knot_app role");
+}
+
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+if ((await redis.ping()) !== "PONG") {
+  throw new Error("Upstash did not answer PING with PONG");
 }
 
 const bucket = process.env.R2_BUCKET_NAME;
@@ -134,4 +148,4 @@ try {
   }
 }
 
-console.log("Neon role and R2 object round-trip verified.");
+console.log("Neon role, Upstash, and R2 object round-trip verified.");

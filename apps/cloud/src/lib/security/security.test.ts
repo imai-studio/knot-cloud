@@ -111,6 +111,7 @@ describe("connector authentication", () => {
   it("rejects body tampering before consuming the nonce", async () => {
     const { connector, headers } = await signedFixture();
     let nonceClaims = 0;
+    let rateLimitChecks = 0;
 
     await expect(
       authenticateConnectorRequest({
@@ -123,11 +124,15 @@ describe("connector authentication", () => {
         nonces: {
           claim: () => ((nonceClaims += 1), Promise.resolve("claimed")),
         },
+        rateLimits: {
+          consume: () => ((rateLimitChecks += 1), Promise.resolve(true)),
+        },
         allowedAuthorities: [authority],
         nowUnixSeconds: now,
       }),
     ).rejects.toBeInstanceOf(ConnectorAuthenticationError);
     expect(nonceClaims).toBe(0);
+    expect(rateLimitChecks).toBe(0);
   });
 
   it("rejects clock skew before connector lookup", async () => {
@@ -173,7 +178,7 @@ describe("connector authentication", () => {
     ).rejects.toThrow("nonce store unavailable");
   });
 
-  it("rate limits a known connector before signature verification", async () => {
+  it("rate limits a connector after signature verification and before nonce use", async () => {
     const { connector, headers } = await signedFixture();
     let nonceClaims = 0;
     const rateLimits: ConnectorRateLimitStore = {

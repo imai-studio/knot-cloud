@@ -16,9 +16,9 @@ Verified locally on 2026-09-01 with Node.js 24 and pnpm 11.
 | Private object storage                           | Vitest covers tenant-derived keys, immutable writes, exact upload bounds, SHA-256 checks, bounded reads, metadata validation, private cache policy, tombstone gating, deduplicated deletion, and partial R2 delete failures.                   |
 
 The production deployment uses Vercel, Neon, private Cloudflare R2, and Resend. The application
-uses R2 through its S3-compatible API and does not use Vercel Blob. Upstash remains unprovisioned
-until a released signed mutation route needs replay protection. The Vercel application environment
-does not contain an owner or migrator database credential.
+uses R2 through its S3-compatible API and does not use Vercel Blob. Signed connector routes remain
+release-gated until Upstash is provisioned and the provider smoke check passes. The Vercel
+application environment does not contain an owner or migrator database credential.
 
 This record does not verify connector pairing, publication mutation, a public reader, API-key
 management, or Anytype data routes. Those routes are not released. The public reader also needs a

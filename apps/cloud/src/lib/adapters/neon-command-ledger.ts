@@ -70,6 +70,17 @@ function completionValues(completion: CommandCompletion): {
   }
 }
 
+export function serializeCommandResult(result: unknown): string | null {
+  if (result === null) return null;
+  const serialized = JSON.stringify(result);
+  if (serialized === undefined) {
+    throw new TypeError(
+      "A successful command result must be JSON serializable",
+    );
+  }
+  return serialized;
+}
+
 export class NeonCommandLedger implements CommandLedger {
   async claim(input: {
     tenantId: string;
@@ -163,7 +174,7 @@ export class NeonCommandLedger implements CommandLedger {
           ${now},
           ${digest},
           ${values.outcome}::command_state,
-          ${JSON.stringify(values.result ?? null)}::jsonb,
+          ${serializeCommandResult(values.result)}::jsonb,
           ${values.errorCode},
           ${values.retryable},
           ${values.retryAfterSeconds}

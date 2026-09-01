@@ -7,6 +7,9 @@ const environmentKeys = [
   "R2_BUCKET_NAME",
   "R2_MAX_OBJECT_BYTES",
   "R2_SECRET_ACCESS_KEY",
+  "REPLAY_STORE_DRIVER",
+  "UPSTASH_REDIS_REST_URL",
+  "UPSTASH_REDIS_REST_TOKEN",
 ] as const;
 
 const originalEnvironment = Object.fromEntries(
@@ -36,5 +39,21 @@ describe("adapter factory", () => {
     const second = createObjectStore();
 
     expect(second).toBe(first);
+  });
+
+  it("rejects an unsupported replay-store driver", async () => {
+    process.env.REPLAY_STORE_DRIVER = "memory";
+    const { createReplayNonceStore } = await import("./factory");
+    expect(() => createReplayNonceStore()).toThrow(
+      "Unsupported REPLAY_STORE_DRIVER: memory",
+    );
+  });
+
+  it("preflights Upstash credentials before serving connector traffic", async () => {
+    process.env.REPLAY_STORE_DRIVER = "upstash";
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    const { createReplayNonceStore } = await import("./factory");
+    expect(() => createReplayNonceStore()).toThrow();
   });
 });

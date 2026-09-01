@@ -12,7 +12,7 @@ import { ZodError, type ZodType } from "zod";
 
 import { NeonCommandLedger } from "@/lib/adapters/neon-command-ledger";
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
-import { UpstashReplayNonceStore } from "@/lib/adapters/upstash-replay";
+import { createReplayNonceStore } from "@/lib/adapters/factory";
 import { getSigningAuthorities } from "@/lib/env";
 import type {
   CommandLedger,
@@ -210,6 +210,19 @@ export function createConnectorCommandHandlers(
           title: "Request body does not match the protocol",
         });
       }
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "22023"
+      ) {
+        return problemResponse({
+          request,
+          status: 422,
+          code: "invalid-request",
+          title: "The command result is not valid for the leased operation",
+        });
+      }
       return problemResponse({
         request,
         status: 500,
@@ -356,7 +369,7 @@ export function createConnectorCommandHandlers(
 }
 
 export function createProductionConnectorCommandHandlers() {
-  const connectorSecurity = new UpstashReplayNonceStore();
+  const connectorSecurity = createReplayNonceStore();
   return createConnectorCommandHandlers({
     commands: new NeonCommandLedger(),
     connectors: new NeonConnectorRepository(),

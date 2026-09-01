@@ -251,9 +251,14 @@ BEGIN
     RAISE EXCEPTION 'Only succeeded commands may include a result';
   END IF;
   IF p_result IS NOT NULL AND pg_column_size(p_result) > 1048576 THEN
-    RAISE EXCEPTION 'Command result exceeds the size limit';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Command result exceeds the size limit';
   END IF;
-  IF p_retry_after_seconds < 0 OR p_retry_after_seconds > 86400 THEN
+  IF p_retry_after_seconds IS NULL
+    OR p_retry_after_seconds < 0
+    OR p_retry_after_seconds > 86400
+  THEN
     RAISE EXCEPTION 'Retry delay is out of range';
   END IF;
   IF p_attempt < 1 THEN
@@ -273,7 +278,9 @@ BEGIN
       AND command.expires_at > p_now
       AND command.payload -> 'operation' ->> 'type' IS DISTINCT FROM p_result ->> 'type'
   ) THEN
-    RAISE EXCEPTION 'Command result type does not match the leased operation';
+    RAISE EXCEPTION USING
+      ERRCODE = 'invalid_parameter_value',
+      MESSAGE = 'Command result type does not match the leased operation';
   END IF;
 
   SELECT completed_at IS NOT NULL

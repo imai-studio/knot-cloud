@@ -104,18 +104,6 @@ export async function authenticateConnectorRequest(input: {
   if (connector.protocolVersion !== requestedProtocol) {
     throw new ConnectorAuthenticationError("protocol-unsupported", 426);
   }
-  if (
-    input.rateLimits &&
-    !(await input.rateLimits.consume({
-      connectorId: connector.id,
-      limit: 300,
-      windowSeconds: 60,
-      nowUnixSeconds: now,
-    }))
-  ) {
-    throw new ConnectorAuthenticationError("rate-limited", 429);
-  }
-
   let request;
   try {
     request = signedRequestSchema.parse({
@@ -155,6 +143,18 @@ export async function authenticateConnectorRequest(input: {
   }
   if (!verified) {
     throw new ConnectorAuthenticationError("invalid-signature", 401);
+  }
+
+  if (
+    input.rateLimits &&
+    !(await input.rateLimits.consume({
+      connectorId: connector.id,
+      limit: 300,
+      windowSeconds: 60,
+      nowUnixSeconds: now,
+    }))
+  ) {
+    throw new ConnectorAuthenticationError("rate-limited", 429);
   }
 
   const nonceResult = await input.nonces.claim({

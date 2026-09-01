@@ -65,6 +65,10 @@ commit any of these values. See
 [`docs/workspace-authorization.md`](docs/workspace-authorization.md) for the human session and tenant
 boundary.
 
+Signed connector routes require an Upstash Redis database for nonce replay protection and connector
+rate limits. Configure `REPLAY_STORE_DRIVER=upstash`, `UPSTASH_REDIS_REST_URL`, and
+`UPSTASH_REDIS_REST_TOKEN` before enabling those routes.
+
 Apply migrations from a trusted checkout:
 
 ```bash

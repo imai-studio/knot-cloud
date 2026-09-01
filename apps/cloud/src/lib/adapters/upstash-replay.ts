@@ -14,17 +14,26 @@ return count
 export class UpstashReplayNonceStore
   implements ReplayNonceStore, ConnectorRateLimitStore
 {
+  readonly #redis: Redis;
+
+  constructor() {
+    const environment = getUpstashEnvironment();
+    this.#redis = new Redis({
+      url: environment.UPSTASH_REDIS_REST_URL,
+      token: environment.UPSTASH_REDIS_REST_TOKEN,
+    });
+  }
+
   async claim(input: {
     connectorId: string;
     nonce: string;
     expiresAt: number;
   }): Promise<"claimed" | "replayed"> {
-    const redis = getRedis();
     const ttlSeconds = Math.max(
       1,
       input.expiresAt - Math.floor(Date.now() / 1_000),
     );
-    const result = await redis.set(
+    const result = await this.#redis.set(
       `connector-nonce:${input.connectorId}:${input.nonce}`,
       "1",
       {
@@ -51,22 +60,11 @@ export class UpstashReplayNonceStore
       throw new TypeError("Rate limit and window must be positive integers");
     }
     const window = Math.floor(input.nowUnixSeconds / input.windowSeconds);
-    const count = await getRedis().eval<unknown[], number>(
+    const count = await this.#redis.eval<unknown[], number>(
       incrementWindowScript,
       [`connector-rate:${input.connectorId}:${window}`],
       [String(input.windowSeconds + 1)],
     );
     return count <= input.limit;
   }
-}
-
-let redis: Redis | undefined;
-
-function getRedis(): Redis {
-  const environment = getUpstashEnvironment();
-  redis ??= new Redis({
-    url: environment.UPSTASH_REDIS_REST_URL,
-    token: environment.UPSTASH_REDIS_REST_TOKEN,
-  });
-  return redis;
 }

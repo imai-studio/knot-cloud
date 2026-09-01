@@ -39,12 +39,19 @@ export function problemResponse(input: {
     retryAfterSeconds: input.retryAfterSeconds,
     serverUnixSeconds: input.serverUnixSeconds,
   });
+  const headers: Record<string, string> = {
+    "Cache-Control": "no-store",
+    "Content-Type": "application/problem+json",
+  };
+  if (
+    input.retryAfterSeconds !== undefined &&
+    (input.status === 429 || input.status === 503)
+  ) {
+    headers["Retry-After"] = String(input.retryAfterSeconds);
+  }
   return Response.json(body, {
     status: input.status,
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": "application/problem+json",
-    },
+    headers,
   });
 }
 
