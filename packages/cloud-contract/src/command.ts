@@ -155,6 +155,16 @@ export const commandResultSubmissionSchema = z
   })
   .strict();
 
+export const commandResultReceiptSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    commandId: opaqueIdSchema,
+    attempt: z.number().int().positive(),
+    status: z.enum(["accepted", "duplicate"]),
+    state: commandStateSchema,
+  })
+  .strict();
+
 export type CommandEnvelope = z.infer<typeof commandEnvelopeSchema>;
 export type CommandResult = z.infer<typeof commandResultSchema>;
 export type CommandClaimRequest = z.infer<typeof commandClaimRequestSchema>;
@@ -163,3 +173,4 @@ export type CommandLeaseExtension = z.infer<typeof commandLeaseExtensionSchema>;
 export type CommandResultSubmission = z.infer<
   typeof commandResultSubmissionSchema
 >;
+export type CommandResultReceipt = z.infer<typeof commandResultReceiptSchema>;
