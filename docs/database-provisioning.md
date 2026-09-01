@@ -70,6 +70,23 @@ repair removes membership rows it granted itself and does not treat provider-own
 application authorization. Remove the local owner credential after the final migration and retain
 it only in the operator's secret store for future migrations.
 
+Apply migrations by authenticating directly as the migration owner rather than entering it with
+`SET ROLE`. Verify the complete public-schema `SECURITY DEFINER` inventory after migration:
+
+```sql
+SELECT function.oid::regprocedure AS signature
+FROM pg_proc AS function
+JOIN pg_namespace AS namespace ON namespace.oid = function.pronamespace
+WHERE namespace.nspname = 'public'
+  AND function.prosecdef
+  AND (
+    has_function_privilege('public', function.oid, 'EXECUTE')
+    OR NOT has_function_privilege('knot_app', function.oid, 'EXECUTE')
+  );
+```
+
+The query must return no rows.
+
 `knot_app` creates and lists pairing requests inside an active tenant context. It calls separate
 approval, denial, rename, and revoke functions. Those functions check that the actor is still an
 owner or admin inside the same transaction. Removing a member keeps historical pairing rows and

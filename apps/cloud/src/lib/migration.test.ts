@@ -1821,6 +1821,8 @@ describe("P0 database isolation", () => {
       REVOKE knot_pairing FROM CURRENT_USER;
     `);
 
+    await database.exec("SET SESSION AUTHORIZATION knot_migrator");
+
     const migrationDirectory = path.join(
       path.dirname(fileURLToPath(import.meta.url)),
       "..",
@@ -1906,6 +1908,7 @@ describe("P0 database isolation", () => {
       ORDER BY signature
     `);
     expect(exposedDefiners.rows).toEqual([]);
+    await database.exec("RESET SESSION AUTHORIZATION");
   });
 });
 
