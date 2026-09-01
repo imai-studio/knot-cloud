@@ -14,6 +14,8 @@ through Neon's console or API role shortcut. A role created that way may inherit
 assume, `neon_superuser`. Knot rejects such a role. Store the resulting runtime URL only as
 `DATABASE_URL`.
 
-The application verifies the runtime role before it enables protected routes. Narrowly scoped
-security-definer functions owned by the no-login `knot_resolver` role perform credential lookup.
-Direct tenant-table reads fail until the transaction establishes tenant context.
+The application verifies the runtime role before protected routes are enabled. Credential lookup
+uses narrow security-definer functions owned by the no-login `knot_resolver` role. Human workspace
+bootstrap and selection use separate functions owned by the no-login `knot_bootstrap` role. Neither
+role can create schema objects, bypass row-level security, or inherit another role. Raw tenant table
+reads still fail closed before a tenant context is established.

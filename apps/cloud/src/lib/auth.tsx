@@ -29,6 +29,18 @@ export async function getAuthorizedSession(requestHeaders: Headers) {
   return session && isAllowedEmail(session.user.email) ? session : null;
 }
 
+export function isTrustedHumanMutationOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  let normalizedOrigin: string;
+  try {
+    normalizedOrigin = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  return getTrustedAuthOrigins().includes(normalizedOrigin);
+}
+
 function createAuth() {
   const cloud = getCloudEnvironment();
   const email = getEmailEnvironment();

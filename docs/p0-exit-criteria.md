@@ -22,6 +22,9 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Fail-closed replay-store boundary.
 - [x] Tenant-scoped migration with composite foreign keys, a restricted role, and forced RLS.
 - [x] Transaction-scoped Neon tenant helper and runtime-role assertion.
+- [x] Better Auth is the only human session authority.
+- [x] First verified session creates one default owner workspace without duplicate tenants.
+- [x] Active workspace selection is bound to a verified session and tenant membership.
 - [x] Link the imai Vercel project, provision Neon, and provision a private Cloudflare R2 bucket.
 - [ ] Choose a separate registrable domain for untrusted public content.
 - [ ] Provision Upstash when a released replay-protected route requires it.

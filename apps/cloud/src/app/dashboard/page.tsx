@@ -17,8 +17,8 @@ import { AccountMenu } from "@/components/account-menu";
 import { Brand } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { getAuthorizedSession } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -86,8 +86,8 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<{ view?: string | string[] }>;
 }) {
-  const session = await getAuthorizedSession(await headers());
-  if (!session) redirect("/login");
+  const authorized = await getAuthorizedWorkspace(await headers());
+  if (!authorized) redirect("/login");
   const view = resolveDashboardView((await searchParams).view);
   const activeItem = navItems.find((item) => item.id === view) ?? navItems[0];
 
@@ -125,9 +125,14 @@ export default async function DashboardPage({
           <Brand className="lg:hidden" href="/dashboard" />
           <div className="hidden lg:block">
             <p className="text-sm font-medium">{activeItem.label}</p>
-            <p className="text-xs text-muted-foreground">imai</p>
+            <p className="text-xs text-muted-foreground">
+              {authorized.workspace.name}
+            </p>
           </div>
-          <AccountMenu email={session.user.email} name={session.user.name} />
+          <AccountMenu
+            email={authorized.identity.user.email}
+            name={authorized.identity.user.name}
+          />
         </header>
 
         <nav
