@@ -208,7 +208,7 @@ describe("closed operation vocabulary", () => {
     expect(() =>
       commandEnvelopeSchema.parse({
         protocolVersion: "1.0",
-        commandId: "command-1",
+        commandId: "00000000-0000-4000-8000-000000000051",
         connectorId: "connector-1",
         requiredScope: "anytype.objects.write",
         createdBy: "consumer-api-key",

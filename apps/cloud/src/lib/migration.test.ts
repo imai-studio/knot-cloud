@@ -438,6 +438,7 @@ describe("P0 database isolation", () => {
     const failedCommand = "00000000-0000-4000-8000-000000000052";
     const rejectedCommand = "00000000-0000-4000-8000-000000000053";
     const invalidDelayCommand = "00000000-0000-4000-8000-000000000054";
+    const deadLetterCommand = "00000000-0000-4000-8000-000000000055";
     await database.exec(`
       INSERT INTO commands (
         id, tenant_id, connector_id, required_scope, payload,
@@ -468,10 +469,24 @@ describe("P0 database isolation", () => {
       SET ROLE knot_app;
       SELECT set_config('app.tenant_id', '${tenantA}', false);
     `);
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload,
+        not_before, expires_at, max_attempts, idempotency_key,
+        created_by_kind, created_by_id, created_at, updated_at
+      ) VALUES (
+        '${deadLetterCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+        '{"domain":"anytype","operation":{"type":"object.read"}}',
+        '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z', 1,
+        'dead-letter-completion-command', 'consumer-api-key', '${apiKeyA}',
+        '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+      )
+    `);
 
     const failedDigest = "d".repeat(64);
     const rejectedDigest = "e".repeat(64);
     const invalidDelayDigest = "f".repeat(64);
+    const deadLetterDigest = "9".repeat(64);
     await database.query(
       "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
       [
@@ -602,6 +617,37 @@ describe("P0 database isolation", () => {
       message: expect.stringContaining("Retryable must be specified"),
     });
 
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:09Z",
+        deadLetterDigest,
+        30,
+      ],
+    );
+    const deadLettered = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5, 'failed', NULL,
+        'temporary-read-failure', true, 30
+      )`,
+      [
+        tenantA,
+        connectorA,
+        deadLetterCommand,
+        "2026-09-01T00:00:10Z",
+        deadLetterDigest,
+      ],
+    );
+    expect(deadLettered.rows).toEqual([
+      { completion_status: "accepted", command_state: "dead-lettered" },
+    ]);
+
     const persisted = await database.query<{
       id: string;
       state: string;
@@ -610,9 +656,9 @@ describe("P0 database isolation", () => {
     }>(
       `SELECT id, state, result, error_code
        FROM commands
-       WHERE id IN ($1, $2)
+       WHERE id IN ($1, $2, $3)
        ORDER BY id`,
-      [failedCommand, rejectedCommand],
+      [failedCommand, rejectedCommand, deadLetterCommand],
     );
     expect(persisted.rows).toEqual([
       {
@@ -626,6 +672,12 @@ describe("P0 database isolation", () => {
         state: "rejected-by-local-policy",
         result: null,
         error_code: "operator-approval-required",
+      },
+      {
+        id: deadLetterCommand,
+        state: "dead-lettered",
+        result: null,
+        error_code: "temporary-read-failure",
       },
     ]);
   });

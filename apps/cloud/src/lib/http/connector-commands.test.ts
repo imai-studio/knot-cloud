@@ -247,6 +247,30 @@ describe("connector command HTTP service", () => {
     );
   });
 
+  it("rejects a non-UUID command id before calling the ledger", async () => {
+    const complete = vi.fn<CommandLedger["complete"]>();
+    const response = await handlers(commands({ complete })).complete(
+      request(`/api/v1/connectors/${connectorId}/commands/result`, {
+        protocolVersion: "1.0",
+        commandId: "not-a-uuid",
+        attempt: 1,
+        leaseToken: "lease_token_1234567890abcdefghijklmnop",
+        result: {
+          outcome: "rejected-by-local-policy",
+          reasonCode: "operator-approval-required",
+        },
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      code: "invalid-request",
+      retryable: false,
+    });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it("acknowledges an idempotent duplicate result", async () => {
     const complete = vi.fn<CommandLedger["complete"]>().mockResolvedValue({
       status: "duplicate",

@@ -38,7 +38,7 @@ export const commandPayloadSchema = z.discriminatedUnion("domain", [
 export const commandEnvelopeSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commandId: opaqueIdSchema,
+    commandId: z.uuid(),
     connectorId: opaqueIdSchema,
     requiredScope: scopeNameSchema,
     createdBy: principalKindSchema,
@@ -131,7 +131,7 @@ export const commandClaimResponseSchema = z
 export const commandLeaseExtensionSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commandId: opaqueIdSchema,
+    commandId: z.uuid(),
     attempt: z.number().int().positive(),
     leaseToken: z.string().min(32).max(200),
     extendBySeconds: z.number().int().min(15).max(300),
@@ -148,7 +148,7 @@ export const commandLeaseFenceSchema = z
 export const commandLeaseExtendedSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commandId: opaqueIdSchema,
+    commandId: z.uuid(),
     attempt: z.number().int().positive(),
     leaseExpiresAt: unixSecondsSchema,
   })
@@ -157,7 +157,7 @@ export const commandLeaseExtendedSchema = z
 export const commandResultSubmissionSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commandId: opaqueIdSchema,
+    commandId: z.uuid(),
     attempt: z.number().int().positive(),
     leaseToken: z.string().min(32).max(200),
     result: commandResultSchema,
@@ -167,7 +167,7 @@ export const commandResultSubmissionSchema = z
 export const commandResultReceiptSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
-    commandId: opaqueIdSchema,
+    commandId: z.uuid(),
     attempt: z.number().int().positive(),
     status: z.enum(["accepted", "duplicate"]),
     state: commandStateSchema,
