@@ -1,126 +1,108 @@
 # Knot Cloud architecture
 
 Knot Cloud coordinates work for local Knot installations. It does not grant an agent access to
-Anytype or the operator's machine. The local Knot configuration remains the authority for every
-operation.
+Anytype or the operator's machine. Local Knot remains the authority for every Anytype operation.
 
-## Deployed P0 components
+## Deployed components
 
-The current production deployment has four services.
+| Component              | Provider      | Role                                                          |
+| ---------------------- | ------------- | ------------------------------------------------------------- |
+| Web application        | Vercel        | Console, connector API, scheduled workers, and reader         |
+| PostgreSQL             | Neon          | Authentication, tenant state, commands, leases, and audit log |
+| Private object storage | Cloudflare R2 | Publication assets and immutable version bundles              |
+| Rate limits            | Upstash Redis | Connector and pairing abuse limits                            |
+| Email                  | Resend        | Passwordless sign-in links for allowed operators              |
 
-| Component              | Provider      | Released role                                                                                        |
-| ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
-| Web application        | Vercel        | Invitation-only login, operator console, `GET /api/health`, and `GET /api/v1/meta`                   |
-| PostgreSQL             | Neon          | Better Auth tables, tenant schema, forced row-level security, and durable records for later releases |
-| Private object storage | Cloudflare R2 | Deployment preflight and the tested immutable object-store adapter                                   |
-| Email                  | Resend        | Passwordless sign-in links for allowed operator addresses                                            |
+The application uses the non-owning `knot_app` database role. Operators apply migrations with a
+separate owner credential that never enters Vercel. The R2 bucket has no public URL. Knot accesses
+it through the S3-compatible API with bucket-scoped credentials.
 
-The web application uses the non-owning `knot_app` database role. Operators apply migrations with a
-separate owner credential that never enters the Vercel environment. The R2 bucket is private. Knot
-uses the AWS S3 client to read and write it, but the current adapter configures Cloudflare R2
-directly.
+The managed control plane is `knot.imai.tech`. The fixed reader origin is
+`pages.imai.studio`. Reader routes return `404` on the control host. Dashboard and control API routes
+return `404` on the reader host.
 
-P0 also contains protocol schemas, migrations, provider adapters, signing code, and tests used by
-later releases. Those foundations do not expose a product API. Knot Cloud has no released route for
-pairing a connector, publishing a document, serving a public page, issuing an API key, or operating
-on Anytype data.
-
-## Current request paths
+## Request paths
 
 ```mermaid
 flowchart LR
-  Browser[Operator browser] --> App[Knot Cloud on Vercel]
-  App --> Auth[Better Auth]
-  Auth --> Email[Resend]
-  Auth --> DB[(Neon PostgreSQL)]
-  App --> DB
-  Preflight[Deployment preflight] --> R2[(Private Cloudflare R2)]
-```
+  Browser[Operator browser] -->|email session| App[Knot Cloud]
+  App --> Auth[Better Auth and Resend]
+  App --> DB[(Neon PostgreSQL)]
+  App --> Redis[Upstash rate limits]
 
-The Vercel build runs a provider preflight against Neon and R2. It confirms that the application
-credential uses the restricted database role. It also completes a private R2 write, read, and delete
-round trip. No released request path stores a user publication in R2.
+  Local[Local Knot connector] -->|Ed25519 signed commands and publications| App
+  Consumer[Consumer service] -->|scoped API key| App
+  App -->|typed commands| Ledger[(Postgres command ledger and leases)]
+  Local -->|claim, extend, result| Ledger
 
-## Publication implementation candidate
-
-The repository contains an unreleased publication lifecycle. It depends on tenant bootstrap,
-connector pairing, signed requests, durable replay claims, and private R2. Postgres remains authoritative.
-
-```mermaid
-flowchart LR
-  Local[Local Knot connector] -->|signed requests| App[Knot Cloud]
-  App --> Commands[(Commands in Neon)]
-  App --> Nonces[(Durable nonces in Neon)]
-  Browser[Operator browser] --> App
-  App --> Publications[(Publication state in Neon)]
-  App --> R2[(Private Cloudflare R2)]
-  Reader[Public reader] --> Content[Separate public-content domain]
-  Content --> Publications
+  Local -->|presigned PUT| R2[(Private R2)]
+  App -->|verify and commit| R2
+  Reader[Reader browser] --> Content[pages.imai.studio or verified host]
+  Content --> DB
   Content --> R2
+
+  Consumer -->|typed channel pointer| Events[(Event and webhook outbox)]
+  WebhookWorker[Scheduled webhook worker] --> Events
+  Events --> Destination[Deployment-approved HTTPS destination]
 ```
+
+## Connector and API authority
 
 The connector generates an Ed25519 key and keeps the private key locally. Knot Cloud stores the
-public key and accepts only signed connector requests. A request must claim a transactionally
-unique Postgres nonce before a
-mutation proceeds. Postgres stores commands, attempts, leases, publication pointers, tombstones,
-and the deletion outbox. Queues and scheduled jobs may start work, but they cannot hold the only
-copy of authoritative state.
+public key. Signed requests claim a unique Postgres nonce before a mutation proceeds. Commands use
+random lease tokens and compare-and-set results, so a stale worker cannot finish a newer attempt.
 
-Publication bytes remain private in R2. Media uploads go directly to short-lived private R2 URLs so
-Vercel does not proxy large bodies. The service reads each object back and verifies its digest and
-length before it can appear in an active version. The candidate public renderer accepts only the
-typed document schema and reads media only when it belongs to the active Postgres version. Disable
-and unpublish first change database state so every reader and media route returns `404`. The
-deletion worker then removes the R2 objects and records completion in the outbox.
+Consumer API keys use a separate credential class. Each key has explicit Anytype scopes, connector
+bindings, quotas, and optional expiry. The API accepts only the typed operation union. It does not
+accept prompts, shell commands, file paths, arbitrary HTTP, or model tools. Cloud admission does
+not bypass the connector's local policy.
 
-## Public-content domain gate
+Transactional event intake also uses a scoped consumer API key. An event stores only an Anytype
+space, chat, and message pointer. A webhook recipient that asks local Knot to act must make Knot
+fetch the native object and authorize its participant.
 
-Untrusted reader pages need a registrable domain separate from the operator console. A subdomain of
-`imai.tech` or `imai.studio` is not enough if those registrable domains continue to host the control
-plane. The exact reader domain has not been chosen.
+## Publishing and readers
 
-Public publishing cannot ship until the domain is recorded, DNS and cookies are scoped, and the
-renderer passes its CSP and cross-origin browser tests. The candidate routes return `404` while
-`CONTENT_BASE_URL` is absent or does not match the request origin.
+Publication assets go directly from local Knot to a short-lived private R2 URL. The signed request
+binds tenant, digest, byte size, kind, and media type. Knot reads the object back, verifies its exact
+length and SHA-256, then permits a typed publication version to reference it.
 
-## Platform extension candidate
+Postgres stores publication pointers, tombstones, and the deletion outbox. Disable and unpublish
+change database state first, so every page and media route returns `404` before physical deletion.
+The scheduled worker then deletes version bundles and unshared assets from R2.
 
-An unreleased stacked branch adds custom-domain verification state, authenticated readers, and
-database-enforced platform limits. It does not edit DNS or enable hosted execution.
+The reader renders only the versioned document schema. It does not accept authored HTML, scripts,
+styles, embeds, or arbitrary URLs. Public and authenticated responses use `no-store`. Grant-backed
+reader sessions are host-only, site-specific, `HttpOnly`, and `SameSite=Lax`. Revoking a grant also
+revokes its reader sessions.
 
-```mermaid
-flowchart LR
-  Owner[Owner or admin] -->|same-origin session| Console[Knot console]
-  Console --> Policy[(Tenant RLS: sites, domains, grants, limits)]
-  Console -->|TXT lookup only| DNS[Operator-controlled DNS]
-  Reader[Reader browser] --> Content[Reader origin or verified custom host]
-  Content -->|grant exchange| Session[(Digest-only reader session)]
-  Content --> Resolver[Narrow knot_resolver functions]
-  Resolver --> Policy
-  Resolver --> Publications[(Active publication state)]
-  Resolver --> R2[(Private R2)]
-```
+Knot verifies custom-domain ownership with an exact DNS TXT challenge. It does not edit DNS,
+attach a domain to Vercel, or provision TLS. The operator owns those steps.
 
-Grant exchange consumes a bounded redemption under a row lock and requires the requested site to
-match before it consumes the grant. Reader cookies are host-only, site-specific, `HttpOnly`, and
-`SameSite=Lax`; they grant no dashboard or data API authority. Authenticated responses are private
-and `no-store` at browser and CDN layers. Revoking a grant revokes its sessions. Typed provider
-boundaries for billing, media derivatives, and hosted connectors remain unavailable until their
-external provider, licensing, isolation, KMS, and recovery requirements are implemented. See
-[`docs/platform-extensions.md`](docs/platform-extensions.md).
+## Scheduled work
+
+Vercel invokes two authenticated routes:
+
+- Every ten minutes, `/api/internal/publications/maintenance` drains publication and asset
+  deletion.
+- Every minute, `/api/internal/webhooks/maintenance` processes a rotating, bounded window of due
+  webhook deliveries.
+
+Self-hosted operators must schedule both routes with the dedicated cron bearer secret. Postgres
+holds the authoritative outbox state. A scheduler may start work but never holds the only copy.
+
+## Disabled providers
+
+Hosted connector execution, billing, and media transformation execution are disabled. The database
+contains bounded configuration or job metadata for these areas, but the provider adapters reject
+execution. A general S3-compatible object adapter also remains planned.
 
 ## Self-hosting boundary
 
-The standalone Next.js image supports self-hosting. The repository has provider boundaries for
-Neon, Cloudflare R2, and Upstash. The R2 object-store adapter uses R2-specific endpoint
-configuration through the S3 protocol. Replay correctness remains Postgres-backed in every
-deployment; Upstash is only a rate-limit adapter. A general S3-compatible object-store adapter
-remains planned.
+The standalone Next.js image supports self-hosting. Self-hosters must keep the runtime database role
+non-owning and subject to row-level security. Object storage stays private. Public content uses a
+different registrable domain from the dashboard. Connector keys, API keys, cron credentials, and
+human sessions stay separate.
 
-Self-hosters must preserve the same trust boundaries. The runtime database role cannot own tables
-or bypass row-level security. Object storage stays private. Public content uses a different
-registrable domain from the dashboard. Connector and API credentials stay separate from human
-sessions.
-
-See [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for the dependency order and
-[`docs/releases.md`](docs/releases.md) for shipped behavior.
+See [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for remaining work and
+[`docs/releases.md`](docs/releases.md) for released behavior.

@@ -11,6 +11,10 @@
     {
       "path": "/api/internal/publications/maintenance",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/internal/webhooks/maintenance",
+      "schedule": "* * * * *"
     }
   ]
 }

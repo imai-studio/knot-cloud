@@ -1,44 +1,46 @@
 # Knot Cloud
 
 Knot Cloud is the remote service for local [Knot](https://github.com/imai-studio/knot)
-installations. It will coordinate connectors, publish selected Anytype content, and expose a typed
+installations. It coordinates connectors, publishes selected Anytype content, and exposes a typed
 Anytype data API. Local Knot remains the authority for access to Anytype and the operator's machine.
 
 ## Release status
 
-The imai-operated P0 foundation is deployed at [knot.imai.tech](https://knot.imai.tech). It provides
-an invitation-only operator console, `GET /api/health`, and `GET /api/v1/meta`. The application also
-builds as a standalone container for self-hosting.
+The imai-operated service runs at [knot.imai.tech](https://knot.imai.tech). Public pages and media
+use the isolated reader origin at [pages.imai.studio](https://pages.imai.studio). The same
+application builds as a standalone container for self-hosting.
 
-The following features are not released:
+The released service supports:
 
-- connector pairing and command delivery;
-- publication upload and public reader pages;
-- consumer API keys and the Anytype data API;
-- a local connector configured to use Knot Cloud.
+- one-time pairing, signed command transport, connector review, rename, and revoke;
+- typed publications with direct R2 asset upload, version history, rollback, disable, and terminal
+  unpublish;
+- scoped API keys for the closed Anytype operation union;
+- public and grant-protected reader sites, custom-domain verification, quotas, and audit records;
+- transactional channel events to webhook destinations approved in deployment configuration.
 
-The health and metadata endpoints are diagnostic. They do not provide an Anytype data API. See
-[`docs/releases.md`](docs/releases.md) for the release contract and
-[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for planned work.
+Hosted connectors, billing, and media transformation execution remain disabled. See
+[`docs/releases.md`](docs/releases.md) for the release record and
+[`docs/implementation-roadmap.md`](docs/implementation-roadmap.md) for the work that remains.
 
 ## Architecture
 
 The deployed application uses:
 
-| Service         | Provider      | Purpose                                      |
-| --------------- | ------------- | -------------------------------------------- |
-| Web application | Vercel        | Operator console and diagnostic endpoints    |
-| PostgreSQL      | Neon          | Authentication and tenant-scoped state       |
-| Object storage  | Cloudflare R2 | Private object storage and deployment checks |
-| Email           | Resend        | Passwordless sign-in links                   |
+| Service         | Provider      | Purpose                                        |
+| --------------- | ------------- | ---------------------------------------------- |
+| Web application | Vercel        | Console, connector API, and isolated reader    |
+| PostgreSQL      | Neon          | Authentication and tenant-scoped state         |
+| Object storage  | Cloudflare R2 | Private publication assets and version bundles |
+| Rate limits     | Upstash Redis | Connector and pairing abuse limits             |
+| Email           | Resend        | Passwordless sign-in links                     |
 
 The application accesses R2 through the AWS S3 client. It does not use Vercel Blob. The current
 adapter is specific to Cloudflare R2. A general S3-compatible adapter remains planned.
 
-Public reader pages need a separate registrable domain from the operator console. No domain has
-been selected, so public publishing remains blocked. The implementation candidate fails closed
-until `CONTENT_BASE_URL` is configured. See
-[`docs/public-reader.md`](docs/public-reader.md).
+The managed deployment uses `pages.imai.studio` as its separate reader domain. Self-hosted
+operators must set `CONTENT_BASE_URL` to a different registrable domain from `APP_BASE_URL`. Reader
+routes fail closed when that boundary is missing. See [`docs/public-reader.md`](docs/public-reader.md).
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for request paths and trust boundaries.
 
@@ -52,8 +54,7 @@ pnpm run check
 pnpm run dev
 ```
 
-The operator console uses invitation-only email links. `https://knot.imai.studio` remains a trusted
-compatibility origin for the imai deployment.
+The operator console uses invitation-only email links.
 
 ## Configuration
 
@@ -87,27 +88,26 @@ restricted `knot_app` role. See
 
 ## Documentation
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): deployed and planned request paths.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): deployed request paths and trust boundaries.
 - [`docs/threat-model.md`](docs/threat-model.md): assets, trust boundaries, threats, and controls.
 - [`docs/database-provisioning.md`](docs/database-provisioning.md): migration and runtime database
   credentials.
-- [`docs/connector-pairing.md`](docs/connector-pairing.md): unreleased pairing candidate and its
-  security boundary.
+- [`docs/connector-pairing.md`](docs/connector-pairing.md): pairing and its security boundary.
 - [`docs/workspace-authorization.md`](docs/workspace-authorization.md): human sessions, workspace
   bootstrap, and tenant selection.
 - [`docs/deployment.md`](docs/deployment.md): deployment and provider preflight steps.
 - [`docs/object-storage.md`](docs/object-storage.md): private R2 keys, verification, and deletion.
-- [`docs/publication-lifecycle.md`](docs/publication-lifecycle.md): unreleased publication upload,
-  controls, provenance, and deletion behavior.
+- [`docs/publication-lifecycle.md`](docs/publication-lifecycle.md): publication upload, controls,
+  provenance, and deletion behavior.
 - [`docs/public-reader.md`](docs/public-reader.md): isolated reader routes and Vercel/self-hosted
   deployment checks.
 - [`docs/scoped-data-api.md`](docs/scoped-data-api.md): P4 key controls, typed operation submission,
   and status retrieval.
-- [`docs/platform-extensions.md`](docs/platform-extensions.md): unreleased custom-domain,
-  authenticated-reader, quota, and provider boundaries.
-- [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
-- [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
-- [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned
+- [`docs/platform-extensions.md`](docs/platform-extensions.md): custom-domain, authenticated-reader,
+  quota, and disabled provider boundaries.
+- [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): historical P0 gates.
+- [`docs/p0-verification.md`](docs/p0-verification.md): historical P0 evidence.
+- [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): delivered phases and remaining
   work.
 - [`docs/releases.md`](docs/releases.md): released behavior.
 

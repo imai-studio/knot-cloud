@@ -3,8 +3,8 @@
 Knot Cloud uses one private Cloudflare R2 bucket through its S3-compatible API. The bucket stores
 immutable publication assets. It is not a public content origin.
 
-The storage port and an unreleased publication lifecycle are implemented. No upload route,
-publication route, deletion worker trigger, or public content hostname is released yet.
+The storage adapter, upload routes, publication lifecycle, scheduled deletion worker, and isolated
+reader hostname are released.
 
 ## Configure R2
 
@@ -78,13 +78,13 @@ Every stored object and private object descriptor uses:
 Cache-Control: private, no-store, max-age=0
 ```
 
-This policy keeps private reads out of browser and shared caches. The public reader applies
-`must-revalidate` with a digest ETag after checking active publication state before and after the
-private read. Conditional requests avoid a second R2 transfer while still rechecking revocation.
+This policy keeps private reads out of browser and shared caches. Public and authenticated reader
+responses also use `no-store`. The reader checks publication state before and after each private
+read, so disable and unpublish take effect without cache invalidation.
 
 ## Tombstones and deletion
 
-Postgres decides whether content may be served. R2 does not. The intended deletion order is:
+Postgres decides whether content may be served. R2 does not. Deletion uses this order:
 
 1. Commit the publication or asset tombstone and a `deletion_outbox` row in one database
    transaction.
@@ -100,12 +100,12 @@ before returning the body. Missing, disabled, unpublished, and unlinked media al
 bundle key belongs to its tenant. It removes duplicate keys and respects R2's 1,000-object batch
 limit. A partial batch failure is an error, so the durable outbox retries it with a new lease.
 
-## Public content domain gate
+## Public content domain
 
-Do not reuse `knot.imai.tech`, `knot.imai.studio`, or another dashboard subdomain as the public
-content origin. Before public publishing ships, choose a separate registrable domain and pass the
-cookie, CSP, DNS, disable, and unpublish checks in [`public-reader.md`](public-reader.md). R2 stays
-private; the application owns reader cache control.
+Do not reuse `knot.imai.tech` or another dashboard subdomain as the public content origin. The
+managed release uses `pages.imai.studio`. Self-hosted operators must choose a separate registrable
+domain and pass the cookie, CSP, DNS, disable, and unpublish checks in
+[`public-reader.md`](public-reader.md). R2 stays private. The application owns reader cache control.
 
 ## Verification
 
@@ -124,5 +124,5 @@ the restricted database URL and R2 credentials loaded in the current shell:
 pnpm --filter @imai/knot-cloud smoke:providers
 ```
 
-Run this check against the exact candidate environment before promotion. It verifies credentials
+Run this check against the exact release environment before promotion. It verifies credentials
 and private bucket access. It does not replace publication commit or destructive-unpublish tests.

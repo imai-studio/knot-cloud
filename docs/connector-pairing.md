@@ -1,7 +1,6 @@
 # Connector pairing
 
-Status: implemented in the connector-pairing release candidate. This flow is not a production
-release until the release record and deployment verification say otherwise.
+Status: released. The managed service and self-hosted build use this flow.
 
 ## Before you start
 
@@ -75,9 +74,7 @@ records whose result expired more than 30 days earlier and returns at most 50 re
   the one-time poll token.
 - Revocation is idempotent and permanently blocks that public key in the workspace.
 
-Site and slug grants are recorded for future command authorization; this pairing release does not
-enforce them. They do not grant local Anytype, filesystem, or agent access. The local Knot policy
-still decides whether to run each command.
-
-The pairing route registers identity and cloud grants only. Signed connector heartbeat and command
-transport remain separate work in the implementation roadmap.
+Command and publication routes enforce the connector's approved scopes, sites, and slug grants.
+Those grants do not provide local Anytype, filesystem, or agent access. Local Knot still decides
+whether to run each command. Knot Cloud has no heartbeat route or last-seen signal. Operators use
+the local `knot cloud status` and `knot cloud doctor` checks for connector diagnostics.

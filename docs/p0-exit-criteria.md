@@ -1,6 +1,8 @@
 # P0 exit criteria
 
-P0 defines compatibility and security boundaries before a public API exists.
+This is the historical P0 checklist from before the public API release. Unchecked items show what
+had not been proved at that point. They do not describe current release status. See
+[`releases.md`](releases.md) for the current contract and evidence.
 
 ## Contract
 
@@ -11,7 +13,7 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Closed typed Anytype operation union.
 - [x] Command envelope, lease fencing, and terminal local-policy rejection.
 - [x] Connector-attested provenance is metadata rather than cloud authority.
-- [ ] Check released-client fixtures against the first server candidate.
+- [ ] Check released-client fixtures against the first server implementation.
 
 ## Deployment targets
 
@@ -29,13 +31,13 @@ P0 defines compatibility and security boundaries before a public API exists.
 - [x] Active workspace selection is bound to a verified session and tenant membership.
 - [x] Link the imai Vercel project, provision Neon, and provision a private Cloudflare R2 bucket.
 - [ ] Choose a separate registrable domain for untrusted public content.
-- [ ] Provision Upstash and pass the provider smoke check before releasing signed connector routes.
+- [ ] Provision Upstash and pass the provider smoke check.
 - [x] Verify the private storage port's digest, size, tenant, cache, and tombstone behavior in unit
       tests.
 - [ ] Verify a large upload against the production R2 limit before raising the 32 MiB default.
-- [ ] Merge the signed command route candidate and apply its command-ledger migration in production.
+- [ ] Merge the signed command routes and apply the command-ledger migration in production.
 - [ ] Deploy the signed command routes and record a live signed claim, lease extension, and result
-      canary. Until then, the routes remain unreleased even when their code is present in a branch.
+      canary.
 - [ ] Exercise row locking and lease fencing against Neon.
 - [ ] Prove publication-aware media returns 404 immediately after a tombstone.
 - [x] Build and run the generated standalone Next.js server.

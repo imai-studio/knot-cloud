@@ -1,9 +1,9 @@
 # Public reader deployment
 
-The public reader is part of the P3 candidate. It stays disabled until `CONTENT_BASE_URL` is set to
-an isolated origin. That origin must use a different registrable domain from `APP_BASE_URL`; a
-subdomain such as `pages.knot.imai.tech` is not sufficient when the console is on
-`knot.imai.tech`.
+The public reader is released at `https://pages.imai.studio`. Self-hosted deployments stay disabled
+until `CONTENT_BASE_URL` points to an isolated origin. That origin must use a different registrable
+domain from `APP_BASE_URL`; a subdomain such as `pages.knot.imai.tech` is not sufficient when the
+console is on `knot.imai.tech`.
 
 Fixed-origin reader URLs use these forms:
 
