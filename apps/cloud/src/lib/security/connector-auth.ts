@@ -7,7 +7,7 @@ import {
   verifyEd25519Signature,
 } from "@imai/knot-cloud-contract";
 
-import type { ReplayNonceStore } from "@/lib/ports";
+import type { ConnectorRateLimitStore, ReplayNonceStore } from "@/lib/ports";
 
 const maximumClockSkewSeconds = 300;
 
@@ -32,8 +32,9 @@ export class ConnectorAuthenticationError extends Error {
       | "invalid-request"
       | "invalid-signature"
       | "protocol-unsupported"
+      | "rate-limited"
       | "replay-detected",
-    readonly status: 400 | 401 | 409 | 426,
+    readonly status: 400 | 401 | 409 | 426 | 429,
   ) {
     super(code);
     this.name = "ConnectorAuthenticationError";
@@ -53,6 +54,7 @@ export async function authenticateConnectorRequest(input: {
   body: Uint8Array;
   connectors: ConnectorRepository;
   nonces: ReplayNonceStore;
+  rateLimits?: ConnectorRateLimitStore;
   allowedAuthorities: readonly string[];
   nowUnixSeconds?: number;
 }): Promise<{ connectorId: string; tenantId: string; scopes: string[] }> {
@@ -102,7 +104,6 @@ export async function authenticateConnectorRequest(input: {
   if (connector.protocolVersion !== requestedProtocol) {
     throw new ConnectorAuthenticationError("protocol-unsupported", 426);
   }
-
   let request;
   try {
     request = signedRequestSchema.parse({
@@ -144,10 +145,22 @@ export async function authenticateConnectorRequest(input: {
     throw new ConnectorAuthenticationError("invalid-signature", 401);
   }
 
+  if (
+    input.rateLimits &&
+    !(await input.rateLimits.consume({
+      connectorId: connector.id,
+      limit: 300,
+      windowSeconds: 60,
+      nowUnixSeconds: now,
+    }))
+  ) {
+    throw new ConnectorAuthenticationError("rate-limited", 429);
+  }
+
   const nonceResult = await input.nonces.claim({
     connectorId,
     nonce,
-    expiresAt: timestamp + maximumClockSkewSeconds + 1,
+    expiresAt: now + maximumClockSkewSeconds * 2,
   });
   if (nonceResult === "replayed") {
     throw new ConnectorAuthenticationError("replay-detected", 409);

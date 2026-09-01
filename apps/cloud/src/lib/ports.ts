@@ -98,6 +98,15 @@ export interface ReplayNonceStore {
   }): Promise<"claimed" | "replayed">;
 }
 
+export interface ConnectorRateLimitStore {
+  consume(input: {
+    connectorId: string;
+    limit: number;
+    windowSeconds: number;
+    nowUnixSeconds: number;
+  }): Promise<boolean>;
+}
+
 export interface JobPublisher {
   publish(input: {
     topic: string;
@@ -138,6 +147,7 @@ export interface CommandLedger {
   }): Promise<ClaimedCommand | undefined>;
   extend(input: {
     tenantId: string;
+    connectorId: string;
     commandId: string;
     attempt: number;
     leaseToken: string;
@@ -145,6 +155,7 @@ export interface CommandLedger {
   }): Promise<Date | undefined>;
   complete(input: {
     tenantId: string;
+    connectorId: string;
     commandId: string;
     attempt: number;
     leaseToken: string;

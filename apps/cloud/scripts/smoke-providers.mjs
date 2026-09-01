@@ -7,6 +7,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { neon } from "@neondatabase/serverless";
+import { Redis } from "@upstash/redis";
 
 const required = [
   "APP_BASE_URL",
@@ -31,6 +32,19 @@ for (const name of required) {
     throw new Error(`${name} is required`);
   }
 }
+if ((process.env.REPLAY_STORE_DRIVER ?? "upstash") !== "upstash") {
+  throw new Error("REPLAY_STORE_DRIVER must be upstash for this deployment");
+}
+
+const explicitUpstash =
+  hasEnvironmentValue("UPSTASH_REDIS_REST_URL") ||
+  hasEnvironmentValue("UPSTASH_REDIS_REST_TOKEN");
+const redisUrl = requiredEnvironmentValue(
+  explicitUpstash ? "UPSTASH_REDIS_REST_URL" : "KV_REST_API_URL",
+);
+const redisToken = requiredEnvironmentValue(
+  explicitUpstash ? "UPSTASH_REDIS_REST_TOKEN" : "KV_REST_API_TOKEN",
+);
 
 const database = neon(process.env.DATABASE_URL);
 const roles = await database`
@@ -59,6 +73,37 @@ if (
   role.has_role_membership
 ) {
   throw new Error("DATABASE_URL is not using the restricted knot_app role");
+}
+
+const commandProcedures = await database`
+  SELECT
+    to_regprocedure(
+      'claim_command(uuid,uuid,scope_name[],timestamp with time zone,text,integer)'
+    ) IS NOT NULL AS claim_command,
+    to_regprocedure(
+      'extend_command_lease(uuid,uuid,uuid,integer,timestamp with time zone,text,integer)'
+    ) IS NOT NULL AS extend_command_lease,
+    to_regprocedure(
+      'complete_command(uuid,uuid,uuid,integer,timestamp with time zone,text,command_state,jsonb,text,boolean,integer)'
+    ) IS NOT NULL AS complete_command
+`;
+const commandProcedure = commandProcedures[0];
+if (
+  !commandProcedure?.claim_command ||
+  !commandProcedure.extend_command_lease ||
+  !commandProcedure.complete_command
+) {
+  throw new Error(
+    "The exact command-ledger procedure signatures from migration 0007 are required",
+  );
+}
+
+const redis = new Redis({
+  url: redisUrl,
+  token: redisToken,
+});
+if ((await redis.ping()) !== "PONG") {
+  throw new Error("Upstash did not answer PING with PONG");
 }
 
 const bucket = process.env.R2_BUCKET_NAME;
@@ -134,4 +179,20 @@ try {
   }
 }
 
-console.log("Neon role and R2 object round-trip verified.");
+console.log(
+  "Neon role and command procedures, Upstash, and R2 object round-trip verified.",
+);
+
+function hasEnvironmentValue(name) {
+  return (
+    typeof process.env[name] === "string" && process.env[name].trim() !== ""
+  );
+}
+
+function requiredEnvironmentValue(name) {
+  const value = process.env[name];
+  if (!value || value === "[SENSITIVE]") {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}

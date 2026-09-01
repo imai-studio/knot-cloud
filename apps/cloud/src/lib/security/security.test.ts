@@ -9,7 +9,7 @@ import {
 } from "@imai/knot-cloud-contract";
 import { describe, expect, it } from "vitest";
 
-import type { ReplayNonceStore } from "@/lib/ports";
+import type { ConnectorRateLimitStore, ReplayNonceStore } from "@/lib/ports";
 
 import { createApiKey, extractApiKeyId, verifyApiKey } from "./api-key";
 import {
@@ -66,11 +66,14 @@ describe("connector authentication", () => {
   it("authenticates before atomically claiming a nonce", async () => {
     const { connector, headers } = await signedFixture();
     const claimed = new Set<string>();
+    const expirations: number[] = [];
     const nonces: ReplayNonceStore = {
-      claim: ({ nonce }) =>
+      claim: ({ nonce, expiresAt }) => (
+        expirations.push(expiresAt),
         Promise.resolve(
           claimed.has(nonce) ? "replayed" : (claimed.add(nonce), "claimed"),
-        ),
+        )
+      ),
     };
     const connectors = {
       findActiveConnector: () => Promise.resolve(connector),
@@ -106,11 +109,13 @@ describe("connector authentication", () => {
         nowUnixSeconds: now,
       }),
     ).rejects.toMatchObject({ code: "replay-detected", status: 409 });
+    expect(expirations).toEqual([now + 600, now + 600]);
   });
 
   it("rejects body tampering before consuming the nonce", async () => {
     const { connector, headers } = await signedFixture();
     let nonceClaims = 0;
+    let rateLimitChecks = 0;
 
     await expect(
       authenticateConnectorRequest({
@@ -123,11 +128,15 @@ describe("connector authentication", () => {
         nonces: {
           claim: () => ((nonceClaims += 1), Promise.resolve("claimed")),
         },
+        rateLimits: {
+          consume: () => ((rateLimitChecks += 1), Promise.resolve(true)),
+        },
         allowedAuthorities: [authority],
         nowUnixSeconds: now,
       }),
     ).rejects.toBeInstanceOf(ConnectorAuthenticationError);
     expect(nonceClaims).toBe(0);
+    expect(rateLimitChecks).toBe(0);
   });
 
   it("rejects clock skew before connector lookup", async () => {
@@ -171,6 +180,32 @@ describe("connector authentication", () => {
         nowUnixSeconds: now,
       }),
     ).rejects.toThrow("nonce store unavailable");
+  });
+
+  it("rate limits a connector after signature verification and before nonce use", async () => {
+    const { connector, headers } = await signedFixture();
+    let nonceClaims = 0;
+    const rateLimits: ConnectorRateLimitStore = {
+      consume: () => Promise.resolve(false),
+    };
+
+    await expect(
+      authenticateConnectorRequest({
+        request: new Request(`https://${authority}${path}`, {
+          method: "POST",
+          headers,
+        }),
+        body,
+        connectors: { findActiveConnector: () => Promise.resolve(connector) },
+        nonces: {
+          claim: () => ((nonceClaims += 1), Promise.resolve("claimed")),
+        },
+        rateLimits,
+        allowedAuthorities: [authority],
+        nowUnixSeconds: now,
+      }),
+    ).rejects.toMatchObject({ code: "rate-limited", status: 429 });
+    expect(nonceClaims).toBe(0);
   });
 
   it("rejects a request for another deployment authority", async () => {

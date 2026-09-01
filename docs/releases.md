@@ -34,6 +34,17 @@ This file is the release contract. Plans belong in
 - A local connector configured to use Knot Cloud.
 - Upstash replay storage, queue workers, scheduled reconciliation, or hosted connectors.
 
+The repository contains a reviewed candidate implementation of the signed command claim, lease,
+and result routes. That code is not part of the release contract until its pull request is merged,
+the command-ledger migration and Upstash configuration are applied in production, the provider
+smoke check passes, and a deployed signed-request canary succeeds. Repository presence alone does
+not make a route released.
+
+The candidate protocol `1.0` command wire format is still pre-release. During review it was
+narrowed so command identifiers and connector route identifiers are UUIDs rather than opaque
+strings. No released-client compatibility promise was changed. Once the command routes enter this
+release record, later incompatible wire changes require an explicit protocol-version transition.
+
 ### Release blocker
 
 - Public reader content needs a separate registrable domain. The domain has not been chosen, so no

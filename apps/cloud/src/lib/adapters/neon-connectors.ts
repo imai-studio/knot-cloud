@@ -25,11 +25,21 @@ export class NeonConnectorRepository implements ConnectorRepository {
     }
     await ensureRuntimeDatabaseRole();
     const rows = await getSql().query(
-      "SELECT * FROM resolve_connector($1::uuid)",
+      `SELECT
+        id,
+        tenant_id,
+        public_key,
+        protocol_version,
+        scopes::text[] AS scopes,
+        revoked_at
+       FROM resolve_connector($1::uuid)`,
       [id],
     );
     const row = rows[0] as ConnectorRow | undefined;
     if (!row) return undefined;
+    if (!Array.isArray(row.scopes)) {
+      throw new TypeError("Connector scopes must be returned as an array");
+    }
     return {
       id: row.id,
       tenantId: row.tenant_id,

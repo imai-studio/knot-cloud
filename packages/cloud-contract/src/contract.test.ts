@@ -185,7 +185,7 @@ describe("typed remote operations", () => {
     expect(() =>
       commandEnvelopeSchema.parse({
         protocolVersion,
-        commandId: "command-1",
+        commandId: "00000000-0000-4000-8000-000000000051",
         connectorId: "connector-1",
         requiredScope: "anytype.objects.read",
         createdBy: "consumer-api-key",

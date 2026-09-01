@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +10,37 @@ const tenantA = "00000000-0000-4000-8000-000000000001";
 const tenantB = "00000000-0000-4000-8000-000000000002";
 const connectorA = "00000000-0000-4000-8000-000000000011";
 const connectorB = "00000000-0000-4000-8000-000000000012";
+const connectorSameTenant = "00000000-0000-4000-8000-000000000013";
 const apiKeyA = "00000000-0000-4000-8000-000000000021";
+const apiKeyB = "00000000-0000-4000-8000-000000000022";
 const authUserA = "auth-user-workspace-a";
 const authSessionA = "auth-session-workspace-a";
 const authSessionB = "auth-session-workspace-b";
+
+describe("migration inventory", () => {
+  it("grandfathers the shipped 0001 pair and keeps later prefixes unique", async () => {
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const migrationFiles = (await readdir(migrationDirectory))
+      .filter((name) => /^\d+.*\.sql$/u.test(name))
+      .sort();
+    expect(migrationFiles.every((name) => /^\d{4}_.+\.sql$/u.test(name))).toBe(
+      true,
+    );
+    expect(migrationFiles.filter((name) => name.startsWith("0001_"))).toEqual([
+      "0001_active_asset_uniqueness.sql",
+      "0001_command_ledger.sql",
+    ]);
+    const laterPrefixes = migrationFiles
+      .filter((name) => Number(name.slice(0, 4)) >= 2)
+      .map((name) => name.slice(0, 4));
+    expect(new Set(laterPrefixes).size).toBe(laterPrefixes.length);
+  });
+});
 
 describe("P0 database isolation", () => {
   let database: PGlite;
@@ -56,17 +84,73 @@ describe("P0 database isolation", () => {
         id, tenant_id, name, protocol_version, public_key, scopes
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
-        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}');
+        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
+        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'), '{}');
       INSERT INTO api_keys (
         id, tenant_id, name, key_id, key_digest, scopes
-      ) VALUES (
-        '${apiKeyA}', '${tenantA}', 'A key', 'abcdefghijklmnop', repeat('0', 64), '{}'
-      );
+      ) VALUES
+        ('${apiKeyA}', '${tenantA}', 'A key', 'abcdefghijklmnop', repeat('0', 64), '{}'),
+        ('${apiKeyB}', '${tenantB}', 'B key', 'bcdefghijklmnopq', repeat('1', 64), '{}');
     `);
   });
 
   afterEach(async () => {
     await database.close();
+  });
+
+  it("preserves the shipped command migration and upgrades signatures additively", async () => {
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const shippedCommandMigration = await readFile(
+      path.join(migrationDirectory, "0001_command_ledger.sql"),
+    );
+    expect(
+      createHash("sha256").update(shippedCommandMigration).digest("hex"),
+    ).toBe("5f2d4b00df78c17bdf7e0115eb111c9b6f076f871dbd6f2ed7ae91c4f1a44546");
+
+    const signatures = await database.query<{
+      old_extend: string | null;
+      new_extend: string | null;
+      old_complete: string | null;
+      new_complete: string | null;
+      scope_constraint: string | null;
+    }>(`
+      SELECT
+        to_regprocedure(
+          'extend_command_lease(uuid,uuid,integer,timestamptz,text,integer)'
+        )::text AS old_extend,
+        to_regprocedure(
+          'extend_command_lease(uuid,uuid,uuid,integer,timestamptz,text,integer)'
+        )::text AS new_extend,
+        to_regprocedure(
+          'complete_command(uuid,uuid,integer,timestamptz,text,command_state,jsonb,text,boolean,integer)'
+        )::text AS old_complete,
+        to_regprocedure(
+          'complete_command(uuid,uuid,uuid,integer,timestamptz,text,command_state,jsonb,text,boolean,integer)'
+        )::text AS new_complete,
+        (
+          SELECT constraint_name
+          FROM information_schema.table_constraints
+          WHERE table_schema = 'public'
+            AND table_name = 'commands'
+            AND constraint_name = 'commands_required_scope_matches_payload'
+        ) AS scope_constraint
+    `);
+    expect(signatures.rows).toEqual([
+      {
+        old_extend: null,
+        new_extend:
+          "extend_command_lease(uuid,uuid,uuid,integer,timestamp with time zone,text,integer)",
+        old_complete: null,
+        new_complete:
+          "complete_command(uuid,uuid,uuid,integer,timestamp with time zone,text,command_state,jsonb,text,boolean,integer)",
+        scope_constraint: "commands_required_scope_matches_payload",
+      },
+    ]);
   });
 
   it("fails closed without a tenant and reveals only the selected tenant", async () => {
@@ -186,6 +270,72 @@ describe("P0 database isolation", () => {
     ).rejects.toMatchObject({ code: "42501" });
   });
 
+  it("revokes resolver DDL and enforces command-attempt tenant policies", async () => {
+    const privileges = await database.query<{
+      can_create: boolean;
+      row_security: boolean;
+      forced_row_security: boolean;
+      policies: string[];
+    }>(`
+      SELECT
+        has_schema_privilege('knot_resolver', 'public', 'CREATE') AS can_create,
+        relation.relrowsecurity AS row_security,
+        relation.relforcerowsecurity AS forced_row_security,
+        ARRAY(
+          SELECT policy.polname
+          FROM pg_policy AS policy
+          WHERE policy.polrelid = relation.oid
+          ORDER BY policy.polname
+        ) AS policies
+      FROM pg_class AS relation
+      WHERE relation.oid = 'command_attempts'::regclass
+    `);
+    expect(privileges.rows).toEqual([
+      {
+        can_create: false,
+        row_security: true,
+        forced_row_security: true,
+        policies: ["tenant_insert", "tenant_select", "tenant_update"],
+      },
+    ]);
+
+    const commandA = "00000000-0000-4000-8000-000000000061";
+    const commandB = "00000000-0000-4000-8000-000000000062";
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload, not_before,
+        expires_at, idempotency_key, created_by_kind, created_by_id
+      ) VALUES
+        (
+          '${commandA}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}', now(),
+          now() + interval '1 hour', 'resolver-attempt-a', 'consumer-api-key', '${apiKeyA}'
+        ),
+        (
+          '${commandB}', '${tenantB}', '${connectorB}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}', now(),
+          now() + interval '1 hour', 'resolver-attempt-b', 'consumer-api-key', '${apiKeyB}'
+        );
+      INSERT INTO command_attempts (
+        tenant_id, command_id, attempt, lease_token_digest, claimed_at
+      ) VALUES
+        ('${tenantA}', '${commandA}', 1, '${"a".repeat(64)}', now()),
+        ('${tenantB}', '${commandB}', 1, '${"b".repeat(64)}', now());
+      SET ROLE knot_resolver;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const visible = await database.query<{ tenant_id: string }>(
+      "SELECT tenant_id FROM command_attempts ORDER BY tenant_id",
+    );
+    expect(visible.rows).toEqual([{ tenant_id: tenantA }]);
+    const crossTenantUpdate = await database.query(
+      `UPDATE command_attempts SET error_code = 'escape'
+       WHERE tenant_id = $1 RETURNING tenant_id`,
+      [tenantB],
+    );
+    expect(crossTenantUpdate.rows).toEqual([]);
+  });
+
   it("limits the runtime role to data access in the auth schema", async () => {
     await database.exec("SET ROLE knot_app");
     await database.exec(`
@@ -254,6 +404,282 @@ describe("P0 database isolation", () => {
         "publications.read",
       ]),
     );
+  });
+
+  it("rejects a command whose required scope does not match its operation", async () => {
+    await expect(
+      database.exec(`
+        INSERT INTO commands (
+          tenant_id,
+          connector_id,
+          required_scope,
+          payload,
+          not_before,
+          expires_at,
+          idempotency_key,
+          created_by_kind,
+          created_by_id
+        ) VALUES (
+          '${tenantA}',
+          '${connectorA}',
+          'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.update"}}',
+          now(),
+          now() + interval '1 hour',
+          'scope-mismatch-command',
+          'consumer-api-key',
+          '${apiKeyA}'
+        )
+      `),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("completes failed and rejected attempts with SQL NULL results", async () => {
+    const failedCommand = "00000000-0000-4000-8000-000000000052";
+    const rejectedCommand = "00000000-0000-4000-8000-000000000053";
+    const invalidDelayCommand = "00000000-0000-4000-8000-000000000054";
+    const deadLetterCommand = "00000000-0000-4000-8000-000000000055";
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload,
+        not_before, expires_at, idempotency_key, created_by_kind, created_by_id,
+        created_at, updated_at
+      ) VALUES
+        (
+          '${failedCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'failed-completion-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        ),
+        (
+          '${rejectedCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'rejected-completion-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        ),
+        (
+          '${invalidDelayCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.read"}}',
+          '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z',
+          'invalid-delay-command', 'consumer-api-key', '${apiKeyA}',
+          '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+        );
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload,
+        not_before, expires_at, max_attempts, idempotency_key,
+        created_by_kind, created_by_id, created_at, updated_at
+      ) VALUES (
+        '${deadLetterCommand}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+        '{"domain":"anytype","operation":{"type":"object.read"}}',
+        '2026-09-01T00:00:00Z', '2026-09-01T01:00:00Z', 1,
+        'dead-letter-completion-command', 'consumer-api-key', '${apiKeyA}',
+        '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'
+      )
+    `);
+
+    const failedDigest = "d".repeat(64);
+    const rejectedDigest = "e".repeat(64);
+    const invalidDelayDigest = "f".repeat(64);
+    const deadLetterDigest = "9".repeat(64);
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:03Z",
+        failedDigest,
+        30,
+      ],
+    );
+    const failed = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5, 'failed', NULL, 'temporary-read-failure', true, 30
+      )`,
+      [
+        tenantA,
+        connectorA,
+        failedCommand,
+        "2026-09-01T00:00:04Z",
+        failedDigest,
+      ],
+    );
+    expect(failed.rows).toEqual([
+      { completion_status: "accepted", command_state: "pending" },
+    ]);
+
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:05Z",
+        rejectedDigest,
+        30,
+      ],
+    );
+    const rejected = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5,
+        'rejected-by-local-policy', NULL, 'operator-approval-required', false, 0
+      )`,
+      [
+        tenantA,
+        connectorA,
+        rejectedCommand,
+        "2026-09-01T00:00:06Z",
+        rejectedDigest,
+      ],
+    );
+    expect(rejected.rows).toEqual([
+      {
+        completion_status: "accepted",
+        command_state: "rejected-by-local-policy",
+      },
+    ]);
+
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:07Z",
+        invalidDelayDigest,
+        30,
+      ],
+    );
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, 'failed', NULL, 'temporary-read-failure', true, NULL
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Retry delay is out of range"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, NULL, NULL, NULL, false, 0
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Unsupported command outcome"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, 1, $4, $5, 'failed', NULL,
+          'temporary-read-failure', NULL, 30
+        )`,
+        [
+          tenantA,
+          connectorA,
+          invalidDelayCommand,
+          "2026-09-01T00:00:08Z",
+          invalidDelayDigest,
+        ],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Retryable must be specified"),
+    });
+
+    await database.query(
+      "SELECT * FROM claim_command($1, $2, $3, $4, $5, $6)",
+      [
+        tenantA,
+        connectorA,
+        "{anytype.objects.read}",
+        "2026-09-01T00:00:09Z",
+        deadLetterDigest,
+        30,
+      ],
+    );
+    const deadLettered = await database.query<{
+      completion_status: string;
+      command_state: string;
+    }>(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, 1, $4, $5, 'failed', NULL,
+        'temporary-read-failure', true, 30
+      )`,
+      [
+        tenantA,
+        connectorA,
+        deadLetterCommand,
+        "2026-09-01T00:00:10Z",
+        deadLetterDigest,
+      ],
+    );
+    expect(deadLettered.rows).toEqual([
+      { completion_status: "accepted", command_state: "dead-lettered" },
+    ]);
+
+    const persisted = await database.query<{
+      id: string;
+      state: string;
+      result: unknown;
+      error_code: string | null;
+    }>(
+      `SELECT id, state, result, error_code
+       FROM commands
+       WHERE id IN ($1, $2, $3)
+       ORDER BY id`,
+      [failedCommand, rejectedCommand, deadLetterCommand],
+    );
+    expect(persisted.rows).toEqual([
+      {
+        id: failedCommand,
+        state: "pending",
+        result: null,
+        error_code: "temporary-read-failure",
+      },
+      {
+        id: rejectedCommand,
+        state: "rejected-by-local-policy",
+        result: null,
+        error_code: "operator-approval-required",
+      },
+      {
+        id: deadLetterCommand,
+        state: "dead-lettered",
+        result: null,
+        error_code: "temporary-read-failure",
+      },
+    ]);
   });
 
   it("fences stale command results and records every claimed attempt", async () => {
@@ -336,10 +762,34 @@ describe("P0 database isolation", () => {
     expect(whileLeased.rows).toEqual([]);
 
     const wrongExtension = await database.query<{ expires_at: Date | null }>(
-      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6) AS expires_at",
-      [tenantA, command, 1, "2026-09-01T00:00:03Z", secondDigest, 60],
+      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6, $7) AS expires_at",
+      [
+        tenantA,
+        connectorA,
+        command,
+        1,
+        "2026-09-01T00:00:03Z",
+        secondDigest,
+        60,
+      ],
     );
     expect(wrongExtension.rows).toEqual([{ expires_at: null }]);
+
+    const shorterExtension = await database.query<{ expires_at: Date | null }>(
+      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6, $7) AS expires_at",
+      [
+        tenantA,
+        connectorA,
+        command,
+        1,
+        "2026-09-01T00:00:03Z",
+        firstDigest,
+        15,
+      ],
+    );
+    expect(shorterExtension.rows[0]?.expires_at).toEqual(
+      new Date("2026-09-01T00:00:31.000Z"),
+    );
 
     const secondClaim = await database.query<{ attempt: number }>(
       "SELECT attempt FROM claim_command($1, $2, $3, $4, $5, $6)",
@@ -359,10 +809,10 @@ describe("P0 database isolation", () => {
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","stale":true}', NULL, false, 0
       )`,
-      [tenantA, command, 1, "2026-09-01T00:00:33Z", firstDigest],
+      [tenantA, connectorA, command, 1, "2026-09-01T00:00:33Z", firstDigest],
     );
     expect(staleResult.rows).toEqual([
       { completion_status: "stale", command_state: "leased" },
@@ -371,36 +821,85 @@ describe("P0 database isolation", () => {
     await expect(
       database.query(
         `SELECT * FROM complete_command(
-          $1, $2, $3, $4, $5, 'succeeded',
+          $1, $2, $3, $4, $5, $6, 'succeeded',
           '{"type":"object.read","crossTenant":true}', NULL, false, 0
         )`,
-        [tenantB, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+        [tenantB, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
       ),
     ).rejects.toThrow(
       "Command completion tenant does not match the active tenant",
     );
 
+    const wrongConnectorResult = await database.query(
+      `SELECT * FROM complete_command(
+        $1, $2, $3, $4, $5, $6, 'succeeded',
+        '{"type":"object.read","wrongConnector":true}', NULL, false, 0
+      )`,
+      [
+        tenantA,
+        connectorSameTenant,
+        command,
+        2,
+        "2026-09-01T00:00:33Z",
+        secondDigest,
+      ],
+    );
+    expect(wrongConnectorResult.rows).toEqual([]);
+    const fencedAttempt = await database.query<{
+      state: string;
+      completed_at: Date | null;
+    }>(
+      `SELECT command.state, attempt.completed_at
+       FROM commands AS command
+       JOIN command_attempts AS attempt
+         ON attempt.tenant_id = command.tenant_id
+        AND attempt.command_id = command.id
+        AND attempt.attempt = 2
+       WHERE command.tenant_id = $1 AND command.id = $2`,
+      [tenantA, command],
+    );
+    expect(fencedAttempt.rows).toEqual([
+      { state: "leased", completed_at: null },
+    ]);
+
     await expect(
       database.query(
         `SELECT * FROM complete_command(
-          $1, $2, $3, $4, $5, 'succeeded',
+          $1, $2, $3, $4, $5, $6, 'succeeded',
+          jsonb_build_object('type', 'object.read', 'data', repeat('x', 1048576)),
+          NULL, false, 0
+        )`,
+        [tenantA, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+      ),
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining("Command result exceeds the size limit"),
+    });
+
+    await expect(
+      database.query(
+        `SELECT * FROM complete_command(
+          $1, $2, $3, $4, $5, $6, 'succeeded',
           '{"type":"object.update"}', NULL, false, 0
         )`,
-        [tenantA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+        [tenantA, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
       ),
-    ).rejects.toThrow(
-      "Command result type does not match the leased operation",
-    );
+    ).rejects.toMatchObject({
+      code: "22023",
+      message: expect.stringContaining(
+        "Command result type does not match the leased operation",
+      ),
+    });
 
     const acceptedResult = await database.query<{
       completion_status: string;
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","ok":true}', NULL, false, 0
       )`,
-      [tenantA, command, 2, "2026-09-01T00:00:34Z", secondDigest],
+      [tenantA, connectorA, command, 2, "2026-09-01T00:00:34Z", secondDigest],
     );
     expect(acceptedResult.rows).toEqual([
       { completion_status: "accepted", command_state: "succeeded" },
@@ -411,10 +910,10 @@ describe("P0 database isolation", () => {
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","ok":true}', NULL, false, 0
       )`,
-      [tenantA, command, 2, "2026-09-01T00:00:35Z", secondDigest],
+      [tenantA, connectorA, command, 2, "2026-09-01T00:00:35Z", secondDigest],
     );
     expect(duplicateResult.rows).toEqual([
       { completion_status: "duplicate", command_state: "succeeded" },
@@ -431,7 +930,7 @@ describe("P0 database isolation", () => {
       [tenantA, command],
     );
     expect(attempts.rows).toEqual([
-      { attempt: 1, outcome: "succeeded" },
+      { attempt: 1, outcome: null },
       { attempt: 2, outcome: "succeeded" },
     ]);
   });

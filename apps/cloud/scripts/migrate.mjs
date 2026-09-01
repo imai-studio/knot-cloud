@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import postgres from "postgres";
 
+import { validateMigrationPlan } from "./migration-plan.mjs";
+
 const databaseUrl = process.env.MIGRATION_DATABASE_URL;
 if (!databaseUrl) {
   throw new Error(
@@ -41,6 +43,19 @@ try {
     )
   `;
 
+  const appliedMigrations = await sql`
+    SELECT name, sha256 FROM schema_migrations ORDER BY name
+  `;
+  validateMigrationPlan(migrationFiles, appliedMigrations);
+
+  for (const applied of appliedMigrations) {
+    const source = await readFile(path.join(directory, applied.name), "utf8");
+    const sha256 = createHash("sha256").update(source).digest("hex");
+    if (applied.sha256 !== sha256) {
+      throw new Error(`Applied migration ${applied.name} has changed`);
+    }
+  }
+
   for (const name of migrationFiles) {
     const source = await readFile(path.join(directory, name), "utf8");
     const sha256 = createHash("sha256").update(source).digest("hex");
@@ -48,12 +63,7 @@ try {
       const existing = await transaction`
         SELECT sha256 FROM schema_migrations WHERE name = ${name}
       `;
-      if (existing[0]) {
-        if (existing[0].sha256 !== sha256) {
-          throw new Error(`Applied migration ${name} has changed`);
-        }
-        return;
-      }
+      if (existing[0]) return;
       await transaction.unsafe(source);
       await transaction`
         INSERT INTO schema_migrations (name, sha256) VALUES (${name}, ${sha256})

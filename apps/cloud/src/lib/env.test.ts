@@ -4,6 +4,7 @@ import {
   parseCloudEnvironment,
   parseEmailEnvironment,
   parseR2Environment,
+  parseUpstashEnvironment,
   signingAuthoritiesFromEnvironment,
   trustedAuthOriginsFromEnvironment,
 } from "./env";
@@ -111,6 +112,49 @@ describe("R2 environment", () => {
       parseR2Environment({
         ...requiredR2,
         R2_MAX_OBJECT_BYTES: "134217729",
+      }),
+    ).toThrow();
+  });
+});
+
+describe("Upstash environment", () => {
+  it("accepts Vercel KV integration names as a fallback", () => {
+    expect(
+      parseUpstashEnvironment({
+        KV_REST_API_URL: "https://vercel-kv.upstash.io",
+        KV_REST_API_TOKEN: "vercel-token",
+      }),
+    ).toEqual({
+      UPSTASH_REDIS_REST_URL: "https://vercel-kv.upstash.io",
+      UPSTASH_REDIS_REST_TOKEN: "vercel-token",
+    });
+  });
+
+  it("prefers an explicit Upstash pair over Vercel integration names", () => {
+    expect(
+      parseUpstashEnvironment({
+        UPSTASH_REDIS_REST_URL: "https://explicit.upstash.io",
+        UPSTASH_REDIS_REST_TOKEN: "explicit-token",
+        KV_REST_API_URL: "https://vercel-kv.upstash.io",
+        KV_REST_API_TOKEN: "vercel-token",
+      }),
+    ).toEqual({
+      UPSTASH_REDIS_REST_URL: "https://explicit.upstash.io",
+      UPSTASH_REDIS_REST_TOKEN: "explicit-token",
+    });
+  });
+
+  it("rejects incomplete explicit or fallback credential pairs", () => {
+    expect(() =>
+      parseUpstashEnvironment({
+        UPSTASH_REDIS_REST_URL: "https://explicit.upstash.io",
+        KV_REST_API_URL: "https://vercel-kv.upstash.io",
+        KV_REST_API_TOKEN: "vercel-token",
+      }),
+    ).toThrow();
+    expect(() =>
+      parseUpstashEnvironment({
+        KV_REST_API_URL: "https://vercel-kv.upstash.io",
       }),
     ).toThrow();
   });

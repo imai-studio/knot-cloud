@@ -70,6 +70,17 @@ function completionValues(completion: CommandCompletion): {
   }
 }
 
+export function serializeCommandResult(result: unknown): string | null {
+  if (result === null) return null;
+  const serialized = JSON.stringify(result);
+  if (serialized === undefined) {
+    throw new TypeError(
+      "A successful command result must be JSON serializable",
+    );
+  }
+  return serialized;
+}
+
 export class NeonCommandLedger implements CommandLedger {
   async claim(input: {
     tenantId: string;
@@ -112,6 +123,7 @@ export class NeonCommandLedger implements CommandLedger {
 
   async extend(input: {
     tenantId: string;
+    connectorId: string;
     commandId: string;
     attempt: number;
     leaseToken: string;
@@ -124,6 +136,7 @@ export class NeonCommandLedger implements CommandLedger {
       transaction`
         SELECT extend_command_lease(
           ${input.tenantId}::uuid,
+          ${input.connectorId}::uuid,
           ${input.commandId}::uuid,
           ${input.attempt},
           ${now},
@@ -138,6 +151,7 @@ export class NeonCommandLedger implements CommandLedger {
 
   async complete(input: {
     tenantId: string;
+    connectorId: string;
     commandId: string;
     attempt: number;
     leaseToken: string;
@@ -154,12 +168,13 @@ export class NeonCommandLedger implements CommandLedger {
         SELECT *
         FROM complete_command(
           ${input.tenantId}::uuid,
+          ${input.connectorId}::uuid,
           ${input.commandId}::uuid,
           ${input.attempt},
           ${now},
           ${digest},
           ${values.outcome}::command_state,
-          ${JSON.stringify(values.result ?? null)}::jsonb,
+          ${serializeCommandResult(values.result)}::jsonb,
           ${values.errorCode},
           ${values.retryable},
           ${values.retryAfterSeconds}
@@ -167,7 +182,7 @@ export class NeonCommandLedger implements CommandLedger {
       `,
     ]);
     const row = rows[0] as CompletionRow | undefined;
-    if (!row) throw new Error("Command completion returned no state");
+    if (!row) return { status: "unknown-lease", state: "expired" };
     return { status: row.completion_status, state: row.command_state };
   }
 }

@@ -22,6 +22,8 @@ const coreEnvironmentSchema = z.object({
   KNOT_SIGNING_AUTHORITIES: optionalNonEmptyString(),
 });
 
+const appBaseUrlSchema = z.url();
+
 const r2EnvironmentSchema = z.object({
   R2_ACCOUNT_ID: z.string().min(1),
   R2_BUCKET_NAME: z
@@ -87,6 +89,15 @@ export function parseCloudEnvironment(
   input: Record<string, string | undefined>,
 ): CloudEnvironment {
   return coreEnvironmentSchema.parse(input);
+}
+
+/**
+ * Read the public application origin without requiring unrelated providers.
+ * Error responses use this trusted deployment setting instead of the request
+ * Host header, which is controlled by the caller at the HTTP boundary.
+ */
+export function getAppBaseUrl(): string {
+  return appBaseUrlSchema.parse(process.env.APP_BASE_URL);
 }
 
 export const requiredEnvironmentKeys = [
@@ -164,7 +175,25 @@ export function parseR2Environment(input: Record<string, string | undefined>) {
 }
 
 export function getUpstashEnvironment() {
-  return upstashEnvironmentSchema.parse(process.env);
+  return parseUpstashEnvironment(process.env);
+}
+
+export function parseUpstashEnvironment(
+  input: Record<string, string | undefined>,
+) {
+  const explicitUrl = nonBlank(input.UPSTASH_REDIS_REST_URL);
+  const explicitToken = nonBlank(input.UPSTASH_REDIS_REST_TOKEN);
+  const hasExplicitConfiguration =
+    explicitUrl !== undefined || explicitToken !== undefined;
+
+  return upstashEnvironmentSchema.parse({
+    UPSTASH_REDIS_REST_URL: hasExplicitConfiguration
+      ? explicitUrl
+      : nonBlank(input.KV_REST_API_URL),
+    UPSTASH_REDIS_REST_TOKEN: hasExplicitConfiguration
+      ? explicitToken
+      : nonBlank(input.KV_REST_API_TOKEN),
+  });
 }
 
 export function getEmailEnvironment() {
@@ -190,4 +219,9 @@ export function isAllowedEmail(email: string): boolean {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function nonBlank(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
