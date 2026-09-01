@@ -75,9 +75,9 @@ records whose result expired more than 30 days earlier and returns at most 50 re
   the one-time poll token.
 - Revocation is idempotent and permanently blocks that public key in the workspace.
 
-Site and slug grants are recorded for command authorization. Enforcement begins with command
-transport; they do not grant local Anytype, filesystem, or agent access. The local Knot policy still
-decides whether to run each command.
+Site and slug grants are recorded for future command authorization; this pairing release does not
+enforce them. They do not grant local Anytype, filesystem, or agent access. The local Knot policy
+still decides whether to run each command.
 
 The pairing route registers identity and cloud grants only. Signed connector heartbeat and command
 transport remain separate work in the implementation roadmap.
