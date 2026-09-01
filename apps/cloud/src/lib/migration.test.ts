@@ -652,20 +652,38 @@ describe("P0 database isolation", () => {
       SET ROLE knot_app;
     `);
 
-    const workspace = await resolveWorkspace(database, authSessionA);
+    const workspace = await resolveWorkspace(database, authSessionA, 7);
     expect(workspace.rows[0]?.user_id).toBe(projectedUser);
 
     await database.exec("RESET ROLE");
     const projection = await database.query<{
       auth_user_id: string;
+      claimed: boolean;
+      digest_version: number;
       user_count: number;
     }>(`
-      SELECT max(auth_user_id) AS auth_user_id, count(*)::int AS user_count
+      SELECT max(auth_user_id) AS auth_user_id,
+        bool_and(claimed_at IS NOT NULL) AS claimed,
+        max(email_digest_version)::int AS digest_version,
+        count(*)::int AS user_count
       FROM users WHERE email_digest = '${"2".repeat(64)}'
     `);
     expect(projection.rows).toEqual([
-      { auth_user_id: authUserA, user_count: 1 },
+      {
+        auth_user_id: authUserA,
+        claimed: true,
+        digest_version: 7,
+        user_count: 1,
+      },
     ]);
+    const audit = await database.query<{ count: number }>(`
+      SELECT count(*)::int AS count FROM audit_events
+      WHERE tenant_id = '${workspace.rows[0]?.tenant_id}'
+        AND action = 'identity.legacy-claim'
+        AND target_id = '${projectedUser}'
+        AND metadata = '{"digestVersion": 7}'::jsonb
+    `);
+    expect(audit.rows).toEqual([{ count: 1 }]);
   });
 
   it("removes the duplicate session authority and protects workspace projections", async () => {
@@ -713,9 +731,9 @@ interface WorkspaceRow {
   suspended_at: string | null;
 }
 
-function resolveWorkspace(database: PGlite, sessionId: string) {
+function resolveWorkspace(database: PGlite, sessionId: string, version = 1) {
   return database.query<WorkspaceRow>(
     `SELECT * FROM resolve_or_bootstrap_workspace($1, $2, $3, $4::smallint, $5)`,
-    [sessionId, authUserA, "2".repeat(64), 1, "Personal workspace"],
+    [sessionId, authUserA, "2".repeat(64), version, "Personal workspace"],
   );
 }

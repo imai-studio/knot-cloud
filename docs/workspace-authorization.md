@@ -11,7 +11,8 @@ transaction:
 1. Verify that the Better Auth session exists, has not expired, belongs to the supplied Better Auth
    user, and has a verified email.
 2. Find the user's Knot projection by Better Auth user ID. An unmapped legacy projection can be
-   claimed only when its keyed email digest and digest version match.
+   claimed only when its keyed email digest matches. The one-time claim records `claimed_at`, writes
+   an audit event, and updates the stored digest version.
 3. Reuse the user's default membership. If none exists, reuse the oldest membership and mark it as
    default. If the user has no membership, create `Personal workspace` and an owner membership.
 4. Store the selected tenant for that Better Auth session.
@@ -49,6 +50,6 @@ another role. Tenant data queries still run through the transaction-scoped tenan
 row-level security.
 
 Email addresses are not stored in the Knot projection. The service stores an HMAC-SHA256 digest of
-the normalized email using `IDENTITY_DIGEST_PEPPER`. Rotate the pepper by increasing
-`IDENTITY_DIGEST_VERSION` and migrating existing projections before serving requests with the new
-value.
+the normalized email using `IDENTITY_DIGEST_PEPPER`. A matching legacy digest is upgraded to the
+configured `IDENTITY_DIGEST_VERSION` during its one-time claim. If a rotation changes the digest,
+migrate existing projections before serving requests with the new pepper.

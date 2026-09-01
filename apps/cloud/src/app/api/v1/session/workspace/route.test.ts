@@ -65,6 +65,8 @@ describe("session workspace route", () => {
       "application/problem+json",
     );
     expect(body.code).toBe("authentication-required");
+    expect(getAuthorizedWorkspace).toHaveBeenCalledOnce();
+    expect(getAuthorizedWorkspace).toHaveBeenCalledWith(expect.any(Headers));
   });
 
   it("rejects cross-origin and malformed workspace changes", async () => {

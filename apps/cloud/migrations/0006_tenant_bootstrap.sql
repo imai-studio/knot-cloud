@@ -35,6 +35,7 @@ REVOKE knot_resolver FROM CURRENT_USER;
 DROP TABLE sessions;
 
 ALTER TABLE users ADD COLUMN auth_user_id text;
+ALTER TABLE users ADD COLUMN claimed_at timestamptz;
 ALTER TABLE users
   ADD CONSTRAINT users_auth_user_id_fk
   FOREIGN KEY (auth_user_id) REFERENCES auth."user"(id) ON DELETE CASCADE;
@@ -82,12 +83,15 @@ CREATE POLICY bootstrap_tenant_members ON tenant_members TO knot_bootstrap
   USING (true) WITH CHECK (true);
 CREATE POLICY bootstrap_session_selection ON session_tenant_selections TO knot_bootstrap
   USING (true) WITH CHECK (true);
+CREATE POLICY bootstrap_audit_insert ON audit_events FOR INSERT TO knot_bootstrap
+  WITH CHECK (true);
 
 GRANT USAGE, CREATE ON SCHEMA public TO knot_bootstrap;
 GRANT USAGE ON SCHEMA auth TO knot_bootstrap;
 GRANT SELECT ON auth."user", auth.session TO knot_bootstrap;
 GRANT SELECT, INSERT, UPDATE ON users, tenants, tenant_members TO knot_bootstrap;
 GRANT SELECT, INSERT, UPDATE, DELETE ON session_tenant_selections TO knot_bootstrap;
+GRANT INSERT ON audit_events TO knot_bootstrap;
 
 REVOKE SELECT, INSERT, UPDATE ON users FROM knot_app;
 REVOKE ALL ON session_tenant_selections FROM PUBLIC, knot_app, knot_resolver;
@@ -115,6 +119,7 @@ DECLARE
   resolved_tenant_name text;
   resolved_member_role text;
   resolved_suspended_at timestamptz;
+  did_claim_legacy boolean := false;
 BEGIN
   IF lookup_email_digest !~ '^[a-f0-9]{64}$' OR lookup_email_digest_version < 1 THEN
     RAISE EXCEPTION 'Invalid identity digest' USING ERRCODE = '22023';
@@ -146,8 +151,8 @@ BEGIN
     FROM public.users AS projected_user
     WHERE projected_user.auth_user_id IS NULL
       AND projected_user.email_digest = lookup_email_digest
-      AND projected_user.email_digest_version = lookup_email_digest_version
     FOR UPDATE;
+    did_claim_legacy := resolved_user_id IS NOT NULL;
   END IF;
 
   IF resolved_user_id IS NULL THEN
@@ -158,7 +163,8 @@ BEGIN
     UPDATE public.users
     SET auth_user_id = lookup_auth_user_id,
         email_digest = lookup_email_digest,
-        email_digest_version = lookup_email_digest_version
+        email_digest_version = lookup_email_digest_version,
+        claimed_at = CASE WHEN did_claim_legacy THEN now() ELSE claimed_at END
     WHERE id = resolved_user_id
       AND (
         auth_user_id IS DISTINCT FROM lookup_auth_user_id
@@ -232,6 +238,18 @@ BEGIN
       user_id = EXCLUDED.user_id,
       tenant_id = EXCLUDED.tenant_id,
       selected_at = now();
+
+  IF did_claim_legacy THEN
+    INSERT INTO public.audit_events (
+      tenant_id, principal_kind, principal_id, action,
+      target_kind, target_id, outcome,
+      metadata
+    ) VALUES (
+      resolved_tenant_id, 'human-session', resolved_user_id,
+      'identity.legacy-claim', 'user', resolved_user_id, 'succeeded',
+      jsonb_build_object('digestVersion', lookup_email_digest_version)
+    );
+  END IF;
 
   RETURN QUERY SELECT resolved_user_id, resolved_tenant_id,
                       resolved_tenant_name, resolved_member_role,

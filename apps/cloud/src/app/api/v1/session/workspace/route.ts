@@ -12,6 +12,9 @@ export const dynamic = "force-dynamic";
 const selectionSchema = z.object({ tenantId: z.uuid() }).strict();
 
 export async function GET(request: Request) {
+  // SECURITY: This authenticated, no-store read intentionally performs the one-time
+  // workspace bootstrap. The database verifies the Better Auth session and serializes
+  // creation; anonymous or unverified requests cannot mutate tenant state.
   const authorized = await getAuthorizedWorkspace(request.headers);
   if (!authorized) return problem(request, 401, "authentication-required");
   return workspaceResponse(authorized.workspace);
