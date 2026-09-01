@@ -25,8 +25,6 @@ const required = [
   "R2_BUCKET_NAME",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
-  "UPSTASH_REDIS_REST_URL",
-  "UPSTASH_REDIS_REST_TOKEN",
 ];
 
 for (const name of required) {
@@ -37,6 +35,16 @@ for (const name of required) {
 if ((process.env.REPLAY_STORE_DRIVER ?? "upstash") !== "upstash") {
   throw new Error("REPLAY_STORE_DRIVER must be upstash for this deployment");
 }
+
+const explicitUpstash =
+  hasEnvironmentValue("UPSTASH_REDIS_REST_URL") ||
+  hasEnvironmentValue("UPSTASH_REDIS_REST_TOKEN");
+const redisUrl = requiredEnvironmentValue(
+  explicitUpstash ? "UPSTASH_REDIS_REST_URL" : "KV_REST_API_URL",
+);
+const redisToken = requiredEnvironmentValue(
+  explicitUpstash ? "UPSTASH_REDIS_REST_TOKEN" : "KV_REST_API_TOKEN",
+);
 
 const database = neon(process.env.DATABASE_URL);
 const roles = await database`
@@ -68,8 +76,8 @@ if (
 }
 
 const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  url: redisUrl,
+  token: redisToken,
 });
 if ((await redis.ping()) !== "PONG") {
   throw new Error("Upstash did not answer PING with PONG");
@@ -149,3 +157,17 @@ try {
 }
 
 console.log("Neon role, Upstash, and R2 object round-trip verified.");
+
+function hasEnvironmentValue(name) {
+  return (
+    typeof process.env[name] === "string" && process.env[name].trim() !== ""
+  );
+}
+
+function requiredEnvironmentValue(name) {
+  const value = process.env[name];
+  if (!value || value === "[SENSITIVE]") {
+    throw new Error(`${name} is required`);
+  }
+  return value;
+}

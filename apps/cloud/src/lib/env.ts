@@ -164,7 +164,25 @@ export function parseR2Environment(input: Record<string, string | undefined>) {
 }
 
 export function getUpstashEnvironment() {
-  return upstashEnvironmentSchema.parse(process.env);
+  return parseUpstashEnvironment(process.env);
+}
+
+export function parseUpstashEnvironment(
+  input: Record<string, string | undefined>,
+) {
+  const explicitUrl = nonBlank(input.UPSTASH_REDIS_REST_URL);
+  const explicitToken = nonBlank(input.UPSTASH_REDIS_REST_TOKEN);
+  const hasExplicitConfiguration =
+    explicitUrl !== undefined || explicitToken !== undefined;
+
+  return upstashEnvironmentSchema.parse({
+    UPSTASH_REDIS_REST_URL: hasExplicitConfiguration
+      ? explicitUrl
+      : nonBlank(input.KV_REST_API_URL),
+    UPSTASH_REDIS_REST_TOKEN: hasExplicitConfiguration
+      ? explicitToken
+      : nonBlank(input.KV_REST_API_TOKEN),
+  });
 }
 
 export function getEmailEnvironment() {
@@ -190,4 +208,9 @@ export function isAllowedEmail(email: string): boolean {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function nonBlank(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }

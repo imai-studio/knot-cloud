@@ -10,6 +10,8 @@ const environmentKeys = [
   "REPLAY_STORE_DRIVER",
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
+  "KV_REST_API_URL",
+  "KV_REST_API_TOKEN",
 ] as const;
 
 const originalEnvironment = Object.fromEntries(
@@ -53,7 +55,19 @@ describe("adapter factory", () => {
     process.env.REPLAY_STORE_DRIVER = "upstash";
     delete process.env.UPSTASH_REDIS_REST_URL;
     delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
     const { createReplayNonceStore } = await import("./factory");
     expect(() => createReplayNonceStore()).toThrow();
+  });
+
+  it("constructs the replay store from Vercel KV integration names", async () => {
+    process.env.REPLAY_STORE_DRIVER = "upstash";
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    process.env.KV_REST_API_URL = "https://vercel-kv.upstash.io";
+    process.env.KV_REST_API_TOKEN = "vercel-token";
+    const { createReplayNonceStore } = await import("./factory");
+    expect(createReplayNonceStore()).toBeDefined();
   });
 });

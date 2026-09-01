@@ -66,8 +66,10 @@ commit any of these values. See
 boundary.
 
 Signed connector routes require an Upstash Redis database for nonce replay protection and connector
-rate limits. Configure `REPLAY_STORE_DRIVER=upstash`, `UPSTASH_REDIS_REST_URL`, and
-`UPSTASH_REDIS_REST_TOKEN` before enabling those routes.
+rate limits. Configure `REPLAY_STORE_DRIVER=upstash` plus either the explicit
+`UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair or Vercel's official integration pair,
+`KV_REST_API_URL`/`KV_REST_API_TOKEN`. Explicit `UPSTASH_*` values take precedence; do not set only
+one value from either pair.
 
 Apply migrations from a trusted checkout:
 
