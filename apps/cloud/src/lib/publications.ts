@@ -157,19 +157,18 @@ export class PublicationService {
     expectedSha256: string;
     expectedByteSize: number;
   }) {
-    const object = await this.objects.get({
+    const object = await this.objects.verify({
       tenantId: input.tenantId,
       sha256: input.expectedSha256,
     });
     if (!object) throw new Error("asset-upload-missing");
-    await object.stream.cancel("asset verified from private storage metadata");
-    if (object.descriptor.size !== input.expectedByteSize) {
+    if (object.size !== input.expectedByteSize) {
       throw new Error("asset-size-mismatch");
     }
     return this.repository.commitAssetUpload({
       ...input,
-      observedSha256: object.descriptor.sha256,
-      observedByteSize: object.descriptor.size,
+      observedSha256: object.sha256,
+      observedByteSize: object.size,
     });
   }
 

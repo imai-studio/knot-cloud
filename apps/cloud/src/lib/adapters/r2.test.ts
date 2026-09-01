@@ -508,6 +508,30 @@ describe("R2PrivateObjectStore", () => {
     );
   });
 
+  it("verifies a direct upload without returning a second buffered body", async () => {
+    const bytes = new Uint8Array([7, 8, 9]);
+    const object = locator(bytes);
+    const client = mockClient(async () => ({
+      Body: responseBody(bytes),
+      ContentLength: bytes.byteLength,
+      ContentType: "image/png",
+      Metadata: {
+        "byte-size": String(bytes.byteLength),
+        kind: "asset",
+        sha256: object.sha256,
+        "tenant-id": object.tenantId,
+      },
+    }));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(store.verify(object)).resolves.toEqual({
+      ...object,
+      key: objectKeyFor(object),
+      contentType: "image/png",
+      size: bytes.byteLength,
+    });
+  });
+
   it("fails a download whose bytes or metadata do not match the key", async () => {
     const expected = new Uint8Array([4, 5]);
     const actual = new Uint8Array([4, 6]);

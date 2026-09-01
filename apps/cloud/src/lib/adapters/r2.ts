@@ -232,6 +232,35 @@ function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
+function validateStoredAssetMetadata(input: {
+  locator: ObjectLocator;
+  metadata?: Record<string, string>;
+  contentLength?: number;
+  contentType?: string;
+  maxObjectBytes: number;
+}): { contentType: string; size: number } {
+  const size = parseStoredSize(input.metadata);
+  if (
+    input.metadata?.sha256 !== input.locator.sha256 ||
+    input.metadata?.["tenant-id"] !== input.locator.tenantId ||
+    input.metadata?.kind !== "asset"
+  ) {
+    throw new Error("stored object metadata does not match its key");
+  }
+  if (
+    size > input.maxObjectBytes ||
+    (input.contentLength !== undefined && input.contentLength !== size)
+  ) {
+    throw new ObjectSizeError(
+      "stored object length does not match its verified metadata",
+    );
+  }
+  return {
+    contentType: input.contentType ?? "application/octet-stream",
+    size,
+  };
+}
+
 export class R2PrivateObjectStore implements ObjectStore {
   readonly #client: S3Client;
   readonly #bucket: string;
@@ -434,26 +463,15 @@ export class R2PrivateObjectStore implements ObjectStore {
       }
 
       const source = result.Body.transformToWebStream();
-      let size: number;
-      let contentType: string;
+      let metadata: { contentType: string; size: number };
       try {
-        size = parseStoredSize(result.Metadata);
-        contentType = parseStoredContentType(result.ContentType);
-        if (
-          result.Metadata?.sha256 !== locator.sha256 ||
-          result.Metadata?.["tenant-id"] !== locator.tenantId ||
-          result.Metadata?.kind !== "asset"
-        ) {
-          throw new Error("stored object metadata does not match its key");
-        }
-        if (
-          size > this.maxObjectBytes ||
-          (result.ContentLength !== undefined && result.ContentLength !== size)
-        ) {
-          throw new ObjectSizeError(
-            "stored object length does not match its verified metadata",
-          );
-        }
+        metadata = validateStoredAssetMetadata({
+          locator,
+          metadata: result.Metadata,
+          contentLength: result.ContentLength,
+          contentType: result.ContentType,
+          maxObjectBytes: this.maxObjectBytes,
+        });
       } catch (error) {
         await source
           .cancel("stored object metadata is invalid")
@@ -463,7 +481,7 @@ export class R2PrivateObjectStore implements ObjectStore {
 
       const body = await materializeBody({
         body: source,
-        contentLength: size,
+        contentLength: metadata.size,
         maxObjectBytes: this.maxObjectBytes,
       });
       if (digest(body, "sha256").toString("hex") !== locator.sha256) {
@@ -473,14 +491,72 @@ export class R2PrivateObjectStore implements ObjectStore {
       const descriptor = {
         ...locator,
         key,
-        contentType,
-        size,
+        contentType: metadata.contentType,
+        size: metadata.size,
       };
       return {
         descriptor,
         cacheControl: privateObjectCacheControl,
         stream: streamFromBytes(body),
       };
+    } catch (error) {
+      if (isMissingObject(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async verify(
+    locator: ObjectLocator,
+  ): Promise<StoredObjectDescriptor | undefined> {
+    const key = objectKeyFor(locator);
+    try {
+      const result = await this.#client.send(
+        new GetObjectCommand({ Bucket: this.#bucket, Key: key }),
+      );
+      if (!result.Body) return undefined;
+      const source = result.Body.transformToWebStream();
+      let metadata: { contentType: string; size: number };
+      try {
+        metadata = validateStoredAssetMetadata({
+          locator,
+          metadata: result.Metadata,
+          contentLength: result.ContentLength,
+          contentType: result.ContentType,
+          maxObjectBytes: this.maxObjectBytes,
+        });
+      } catch (error) {
+        await source.cancel("stored object metadata is invalid");
+        throw error;
+      }
+
+      const hash = createHash("sha256");
+      const reader = source.getReader();
+      let observedSize = 0;
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          observedSize += chunk.value.byteLength;
+          if (observedSize > metadata.size) {
+            await reader.cancel("stored object exceeds its verified length");
+            throw new ObjectSizeError(
+              "stored object length does not match its verified metadata",
+            );
+          }
+          hash.update(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (observedSize !== metadata.size) {
+        throw new ObjectSizeError(
+          "stored object length does not match its verified metadata",
+        );
+      }
+      if (hash.digest("hex") !== locator.sha256) {
+        throw new ObjectDigestMismatchError();
+      }
+      return { ...locator, key, ...metadata };
     } catch (error) {
       if (isMissingObject(error)) return undefined;
       throw error;

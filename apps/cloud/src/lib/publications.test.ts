@@ -183,6 +183,7 @@ function objectStore(overrides: Partial<ObjectStore> = {}): ObjectStore {
     createPresignedAssetUpload: vi.fn(),
     putImmutable: vi.fn(),
     putPublicationBundleImmutable: vi.fn(),
+    verify: vi.fn(),
     get: vi.fn(),
     deleteTombstoned: vi.fn(),
     ...overrides,

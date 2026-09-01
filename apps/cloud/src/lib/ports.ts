@@ -53,6 +53,7 @@ export interface ObjectStore {
     contentLength?: number;
     contentType: "application/vnd.imai.knot.publication+json";
   }): Promise<StoredObjectDescriptor>;
+  verify(locator: ObjectLocator): Promise<StoredObjectDescriptor | undefined>;
   get(locator: ObjectLocator): Promise<StoredObject | undefined>;
   deleteTombstoned(objects: TombstonedObject[]): Promise<void>;
 }
