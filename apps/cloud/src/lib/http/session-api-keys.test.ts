@@ -13,6 +13,7 @@ vi.mock("@/lib/workspace-auth", () => ({
   getAuthorizedWorkspace: vi.fn(),
 }));
 vi.mock("@/lib/env", () => ({
+  getAppBaseUrl: () => "https://knot.test",
   getApiKeyPeppers: () => [{ version: 1, value: "p".repeat(32) }],
 }));
 
