@@ -1,0 +1,25 @@
+{
+  "serverSupportedVersions": ["1.0"],
+  "cases": [
+    {
+      "name": "legacy-client-without-common-version",
+      "clientSupportedVersions": ["0.9"],
+      "expectedNegotiatedVersion": null
+    },
+    {
+      "name": "current-client",
+      "clientSupportedVersions": ["1.0"],
+      "expectedNegotiatedVersion": "1.0"
+    },
+    {
+      "name": "newer-client-retaining-v1-fallback",
+      "clientSupportedVersions": ["1.1", "1.0"],
+      "expectedNegotiatedVersion": "1.0"
+    },
+    {
+      "name": "future-client-without-common-version",
+      "clientSupportedVersions": ["1.1"],
+      "expectedNegotiatedVersion": null
+    }
+  ]
+}

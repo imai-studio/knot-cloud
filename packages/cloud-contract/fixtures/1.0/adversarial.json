@@ -1,0 +1,68 @@
+{
+  "credentialClassCases": [
+    {
+      "endpointClass": "human-administration",
+      "principal": "human-session",
+      "allowed": true
+    },
+    {
+      "endpointClass": "human-administration",
+      "principal": "connector-key",
+      "allowed": false
+    },
+    {
+      "endpointClass": "connector-protocol",
+      "principal": "consumer-api-key",
+      "allowed": false
+    },
+    {
+      "endpointClass": "consumer-data-api",
+      "principal": "human-session",
+      "allowed": false
+    },
+    {
+      "endpointClass": "first-party-internal",
+      "principal": "first-party-service",
+      "allowed": true
+    }
+  ],
+  "leaseFence": {
+    "active": {
+      "attempt": 2,
+      "leaseToken": "active-lease-token-0000000000000002"
+    },
+    "cases": [
+      {
+        "name": "current-lease",
+        "candidate": {
+          "attempt": 2,
+          "leaseToken": "active-lease-token-0000000000000002"
+        },
+        "accepted": true
+      },
+      {
+        "name": "stale-attempt",
+        "candidate": {
+          "attempt": 1,
+          "leaseToken": "active-lease-token-0000000000000002"
+        },
+        "accepted": false
+      },
+      {
+        "name": "stale-token",
+        "candidate": {
+          "attempt": 2,
+          "leaseToken": "expired-lease-token-00000000000001"
+        },
+        "accepted": false
+      }
+    ]
+  },
+  "untrustedNativeProvenance": {
+    "kind": "connector-attested-anytype",
+    "connectorId": "connector-1",
+    "senderParticipantId": "raw-participant-id-must-not-cross-the-boundary",
+    "spaceId": "space-1",
+    "messageId": "message-1"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "signedRequest": {
+    "input": {
+      "protocolVersion": "1.0",
+      "connectorId": "connector-1",
+      "authority": "cloud.knot.imai.tech",
+      "method": "POST",
+      "path": "/api/v1/connectors/connector-1/commands/claim",
+      "query": "",
+      "timestamp": 1788192000,
+      "nonce": "nonce_1234567890abcdef",
+      "bodySha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "canonical": "knot-cloud-ed25519-v1\n1.0\nconnector-1\ncloud.knot.imai.tech\nPOST\n/api/v1/connectors/connector-1/commands/claim\n\n1788192000\nnonce_1234567890abcdef\n0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "idempotency": {
+    "input": {
+      "credentialId": "connector-1",
+      "tenantId": "tenant-1",
+      "operation": "object.read",
+      "targetId": "object-1",
+      "payload": {
+        "type": "object.read",
+        "spaceId": "space-1",
+        "objectId": "object-1"
+      }
+    },
+    "expected": "kc1_5ab623223a39389d3dbfdde31d2b202e64accee8c02f134345b30e9765561942"
+  },
+  "pairing": {
+    "protocolVersion": "1.0",
+    "connectorName": "Knot on MacBook",
+    "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "requestedScopes": ["anytype.objects.read", "publications.write"],
+    "requestedSlugGrants": ["notes/*"]
+  },
+  "assetUpload": {
+    "protocolVersion": "1.0",
+    "connectorId": "connector-1",
+    "siteId": "site-1",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "byteSize": 128,
+    "contentType": "image/png",
+    "fileName": "flower.png",
+    "idempotencyKey": "upload-fixture-0001"
+  },
+  "operation": {
+    "protocolVersion": "1.0",
+    "connectorId": "connector-1",
+    "idempotencyKey": "operation-fixture-0001",
+    "createdAt": 1788192000,
+    "expiresAt": 1788192600,
+    "operation": {
+      "type": "collection.read",
+      "spaceId": "space-1",
+      "collectionId": "collection-1",
+      "limit": 50
+    }
+  }
+}

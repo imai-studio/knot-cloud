@@ -3,10 +3,12 @@ import { z } from "zod";
 import {
   idempotencyKeySchema,
   opaqueIdSchema,
+  sha256Schema,
   unixSecondsSchema,
 } from "./identifiers.js";
+import { protocolVersion, type ScopeName } from "./protocol.js";
 
-const propertyValueSchema = z.union([
+export const propertyValueSchema = z.union([
   z.boolean(),
   z.number(),
   z.string().max(100_000),
@@ -19,7 +21,7 @@ const forbiddenPropertyKeys = new Set([
   "constructor",
   "prototype",
 ]);
-const objectPropertiesSchema = z
+export const objectPropertiesSchema = z
   .record(z.string().max(200), propertyValueSchema)
   .refine((value) => Object.keys(value).length <= 1_000, "Too many properties")
   .refine(
@@ -60,10 +62,31 @@ export const anytypeOperationSchema = z.discriminatedUnion("type", [
     objectId: opaqueIdSchema,
   }),
   z.object({
+    type: z.literal("collection.read"),
+    spaceId: opaqueIdSchema,
+    collectionId: opaqueIdSchema,
+    limit: z.number().int().min(1).max(100).default(50),
+    cursor: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{16,512}$/u)
+      .optional(),
+  }),
+  z.object({
     type: z.enum(["collection.members.add", "collection.members.remove"]),
     spaceId: opaqueIdSchema,
     collectionId: opaqueIdSchema,
     objectIds: z.array(opaqueIdSchema).min(1).max(100),
+  }),
+  z.object({
+    type: z.literal("file.upload"),
+    spaceId: opaqueIdSchema,
+    assetDigest: sha256Schema,
+    name: z.string().trim().min(1).max(500),
+  }),
+  z.object({
+    type: z.literal("file.download"),
+    spaceId: opaqueIdSchema,
+    fileId: opaqueIdSchema,
   }),
   z.object({
     type: z.literal("file.attach"),
@@ -88,7 +111,7 @@ export const anytypeOperationSchema = z.discriminatedUnion("type", [
 
 export const anytypeOperationRequestSchema = z
   .object({
-    protocolVersion: z.literal("1.0"),
+    protocolVersion: z.literal(protocolVersion),
     connectorId: opaqueIdSchema,
     idempotencyKey: idempotencyKeySchema,
     createdAt: unixSecondsSchema,
@@ -106,3 +129,31 @@ export type AnytypeOperation = z.infer<typeof anytypeOperationSchema>;
 export type AnytypeOperationRequest = z.infer<
   typeof anytypeOperationRequestSchema
 >;
+
+export function requiredScopeForAnytypeOperation(
+  operation: AnytypeOperation,
+): ScopeName {
+  switch (operation.type) {
+    case "object.read":
+    case "object.query":
+      return "anytype.objects.read";
+    case "object.create":
+    case "object.update":
+    case "object.archive":
+      return "anytype.objects.write";
+    case "collection.read":
+      return "anytype.collections.read";
+    case "collection.members.add":
+    case "collection.members.remove":
+      return "anytype.collections.write";
+    case "file.download":
+      return "anytype.files.read";
+    case "file.upload":
+    case "file.attach":
+      return "anytype.files.write";
+    case "chat.read":
+      return "anytype.chats.read";
+    case "chat.send":
+      return "anytype.chats.send";
+  }
+}
