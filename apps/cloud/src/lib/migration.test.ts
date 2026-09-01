@@ -571,6 +571,68 @@ describe("P0 database isolation", () => {
     ]);
   });
 
+  it("promotes an existing membership to the default workspace", async () => {
+    const projectedUser = "00000000-0000-4000-8000-000000000072";
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES (
+        '${authSessionA}', now() + interval '1 hour', 'workspace-token-a',
+        now(), now(), '${authUserA}'
+      );
+      INSERT INTO users (
+        id, auth_user_id, email_digest, email_digest_version
+      ) VALUES (
+        '${projectedUser}', '${authUserA}', '${"2".repeat(64)}', 1
+      );
+      INSERT INTO tenant_members (tenant_id, user_id, role, is_default)
+      VALUES ('${tenantA}', '${projectedUser}', 'member', false);
+      SET ROLE knot_app;
+    `);
+
+    const workspace = await resolveWorkspace(database, authSessionA);
+    expect(workspace.rows).toEqual([
+      {
+        member_role: "member",
+        suspended_at: null,
+        tenant_id: tenantA,
+        tenant_name: "Tenant A",
+        user_id: projectedUser,
+      },
+    ]);
+
+    await database.exec("RESET ROLE");
+    const membership = await database.query<{ is_default: boolean }>(`
+      SELECT is_default FROM tenant_members
+      WHERE tenant_id = '${tenantA}' AND user_id = '${projectedUser}'
+    `);
+    expect(membership.rows).toEqual([{ is_default: true }]);
+  });
+
+  it("enforces case-insensitive uniqueness for Better Auth email addresses", async () => {
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        'auth-case-a', 'Case A', 'raj@example.test', true, now(), now()
+      )
+    `);
+    await expect(
+      database.exec(`
+        INSERT INTO auth."user" (
+          id, name, email, "emailVerified", "createdAt", "updatedAt"
+        ) VALUES (
+          'auth-case-b', 'Case B', 'RAJ@EXAMPLE.TEST', true, now(), now()
+        )
+      `),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
   it("claims an existing keyed identity projection instead of creating a second user", async () => {
     const projectedUser = "00000000-0000-4000-8000-000000000071";
     await database.exec(`

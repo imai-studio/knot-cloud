@@ -42,6 +42,9 @@ CREATE UNIQUE INDEX users_auth_user_id_idx
   ON users (auth_user_id)
   WHERE auth_user_id IS NOT NULL;
 
+UPDATE auth."user" SET email = lower(trim(email));
+CREATE UNIQUE INDEX auth_user_email_lower_idx ON auth."user" (lower(email));
+
 COMMENT ON TABLE users IS
   'Workspace identity projection. auth.user and auth.session are the sole human authentication authority.';
 COMMENT ON COLUMN users.auth_user_id IS
@@ -201,9 +204,10 @@ BEGIN
     LIMIT 1;
 
     IF resolved_tenant_id IS NOT NULL THEN
-      UPDATE public.tenant_members
+      UPDATE public.tenant_members AS membership
       SET is_default = true
-      WHERE tenant_id = resolved_tenant_id AND user_id = resolved_user_id;
+      WHERE membership.tenant_id = resolved_tenant_id
+        AND membership.user_id = resolved_user_id;
     END IF;
   END IF;
 

@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import { Resend } from "resend";
 
 import { MagicLinkEmail } from "@/lib/auth-email";
+import { normalizeAuthEmail } from "@/lib/auth-identity";
 import {
   getCloudEnvironment,
   getEmailEnvironment,
@@ -63,6 +64,15 @@ function createAuth() {
     }),
     secret: cloud.AUTH_SECRET,
     trustedOrigins: getTrustedAuthOrigins(),
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => ({
+            data: { ...user, email: normalizeAuthEmail(user.email) },
+          }),
+        },
+      },
+    },
     session: {
       expiresIn: 60 * 60 * 24,
       updateAge: 60 * 60 * 6,

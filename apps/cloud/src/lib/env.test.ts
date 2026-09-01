@@ -10,7 +10,6 @@ import {
 const required = {
   APP_BASE_URL: "https://cloud.knot.test",
   AUTH_BASE_URL: "https://app.knot.test",
-  CONTENT_BASE_URL: "https://content.knot.test",
   DATABASE_URL: "postgres://knot_app:secret@db.test/knot",
   AUTH_SECRET: "a".repeat(32),
   API_KEY_PEPPER: "p".repeat(32),

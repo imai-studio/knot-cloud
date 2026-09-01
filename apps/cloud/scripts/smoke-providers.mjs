@@ -11,7 +11,6 @@ import { neon } from "@neondatabase/serverless";
 const required = [
   "APP_BASE_URL",
   "AUTH_BASE_URL",
-  "CONTENT_BASE_URL",
   "AUTH_SECRET",
   "API_KEY_PEPPER",
   "API_KEY_PEPPER_VERSION",

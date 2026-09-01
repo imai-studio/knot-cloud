@@ -36,8 +36,8 @@ The application accesses R2 through the AWS S3 client. It does not use Vercel Bl
 adapter is specific to Cloudflare R2. A general S3-compatible adapter remains planned.
 
 Public reader pages need a separate registrable domain from the operator console. No domain has
-been selected, so public publishing remains blocked. `CONTENT_BASE_URL` is a configuration
-boundary, not an approved production content domain.
+been selected, so public publishing remains blocked. The reader origin will become a required
+setting only when that service is implemented.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for request paths and trust boundaries.
 
