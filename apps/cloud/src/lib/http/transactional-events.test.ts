@@ -1,5 +1,8 @@
 import type { ResolvedConsumerApiKey } from "@/lib/consumer-data";
-import type { TransactionalEventRepository } from "@/lib/transactional-events";
+import {
+  TransactionalEventError,
+  type TransactionalEventRepository,
+} from "@/lib/transactional-events";
 import { describe, expect, it, vi } from "vitest";
 
 import { createTransactionalEventHandler } from "./transactional-events";
@@ -92,5 +95,52 @@ describe("transactional event ingress", () => {
         )
       ).status,
     ).toBe(400);
+  });
+
+  it("uses semantic idempotency that excludes the retry timestamp", async () => {
+    const enqueue = vi
+      .fn<TransactionalEventRepository["enqueue"]>()
+      .mockResolvedValueOnce({
+        eventId: "00000000-0000-4000-8000-000000000031",
+        created: true,
+      })
+      .mockResolvedValueOnce({
+        eventId: "00000000-0000-4000-8000-000000000031",
+        created: false,
+      });
+    const handler = createTransactionalEventHandler({
+      events: { enqueue } as unknown as TransactionalEventRepository,
+      authenticate: async () => credential,
+      now: () => new Date(1_788_192_001_000),
+    });
+    expect((await handler(request())).status).toBe(202);
+    expect((await handler(request({ createdAt: 1_788_192_001 }))).status).toBe(
+      200,
+    );
+    expect(enqueue.mock.calls[0]?.[0].requestSha256).toBe(
+      enqueue.mock.calls[1]?.[0].requestSha256,
+    );
+  });
+
+  it("returns a bounded retryable quota response", async () => {
+    const handler = createTransactionalEventHandler({
+      events: {
+        enqueue: vi.fn(async () => {
+          throw new TransactionalEventError(
+            "quota-exceeded",
+            "API key quota exceeded",
+          );
+        }),
+      } as unknown as TransactionalEventRepository,
+      authenticate: async () => credential,
+      now: () => new Date(1_788_192_000_000),
+    });
+    const response = await handler(request());
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    await expect(response.json()).resolves.toMatchObject({
+      code: "quota-exceeded",
+      retryable: true,
+    });
   });
 });

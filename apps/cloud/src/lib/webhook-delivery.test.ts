@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 
 import { canonicalWebhookDelivery } from "@imai/knot-cloud-contract";
 import { describe, expect, it, vi } from "vitest";
@@ -115,6 +115,59 @@ describe("webhook delivery worker", () => {
       expect.objectContaining({
         retryable: false,
         errorCode: "destination-removed",
+      }),
+    );
+  });
+
+  it("accepts oversized 2xx responses with a bounded hash and truncation marker", async () => {
+    const repo = repository();
+    const worker = new WebhookDeliveryWorker(
+      repo.value,
+      new Map([
+        [
+          "automation",
+          { url: "https://hooks.example/events", secret: "s".repeat(32) },
+        ],
+      ]),
+      vi.fn(
+        async () => new Response("x".repeat(70 * 1024), { status: 200 }),
+      ) as typeof fetch,
+    );
+    await worker.drainTenant(delivery.tenantId);
+    expect(repo.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        retryable: false,
+        responseStatus: 200,
+        responseSha256: createHash("sha256")
+          .update("x".repeat(64 * 1024))
+          .digest("hex"),
+        errorCode: "response-truncated",
+      }),
+    );
+  });
+
+  it("dead-letters oversized non-2xx responses", async () => {
+    const repo = repository();
+    const worker = new WebhookDeliveryWorker(
+      repo.value,
+      new Map([
+        [
+          "automation",
+          { url: "https://hooks.example/events", secret: "s".repeat(32) },
+        ],
+      ]),
+      vi.fn(
+        async () => new Response("x".repeat(70 * 1024), { status: 503 }),
+      ) as typeof fetch,
+    );
+    await worker.drainTenant(delivery.tenantId);
+    expect(repo.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        retryable: false,
+        responseStatus: 503,
+        errorCode: "response-too-large",
       }),
     );
   });

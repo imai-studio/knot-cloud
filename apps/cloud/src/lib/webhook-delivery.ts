@@ -84,7 +84,8 @@ export class WebhookDeliveryWorker {
       const responseSha256 = createHash("sha256")
         .update(responseBody.bytes)
         .digest("hex");
-      if (responseBody.tooLarge)
+      const success = response.status >= 200 && response.status < 300;
+      if (responseBody.tooLarge && !success)
         return this.repository.complete({
           delivery,
           now: this.now(),
@@ -94,7 +95,6 @@ export class WebhookDeliveryWorker {
           responseSha256,
           errorCode: "response-too-large",
         });
-      const success = response.status >= 200 && response.status < 300;
       const retryable =
         [408, 409, 425, 429].includes(response.status) ||
         response.status >= 500;
@@ -105,7 +105,11 @@ export class WebhookDeliveryWorker {
         retryable,
         responseStatus: response.status,
         responseSha256,
-        ...(!success ? { errorCode: `http-${response.status}` } : {}),
+        ...(responseBody.tooLarge
+          ? { errorCode: "response-truncated" }
+          : !success
+            ? { errorCode: `http-${response.status}` }
+            : {}),
       });
     } catch {
       return this.repository.complete({

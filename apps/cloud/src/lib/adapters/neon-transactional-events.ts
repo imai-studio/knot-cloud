@@ -11,6 +11,7 @@ import type {
   ClaimedWebhookDelivery,
   TransactionalEventRepository,
 } from "@/lib/transactional-events";
+import { TransactionalEventError } from "@/lib/transactional-events";
 
 import { ensureRuntimeDatabaseRole, getSql, withTenant } from "./neon";
 
@@ -43,30 +44,31 @@ export class NeonTransactionalEventRepository implements TransactionalEventRepos
     input: Parameters<TransactionalEventRepository["createSubscription"]>[0],
   ) {
     const [rows = []] = await withTenant(input.tenantId, (transaction) => [
-      transaction`WITH authorized AS (
-        SELECT count(*)::int AS count FROM connectors
-        WHERE tenant_id=${input.tenantId}::uuid
-          AND id=ANY(${input.values.connectorIds}::uuid[])
-      ), inserted AS (
-      INSERT INTO webhook_subscriptions(
-        tenant_id,name,destination_name,event_types,connector_ids,created_by
-      ) SELECT
-        ${input.tenantId}::uuid,${input.values.name},${input.values.destinationName},
-        ${input.values.eventTypes}::text[],${input.values.connectorIds}::uuid[],${input.userId}::uuid
-      FROM authorized WHERE count=${input.values.connectorIds.length}
-      RETURNING id,name,destination_name,event_types,connector_ids,active,created_at
-      ), audited AS (
-        INSERT INTO audit_events(
-          tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
-        ) SELECT
-          ${input.tenantId}::uuid,'human-session',${input.userId}::uuid,
-          'webhook.subscription.create','webhook-subscription',inserted.id,'succeeded',
-          jsonb_build_object('connectors',inserted.connector_ids)
-        FROM inserted
-      ) SELECT * FROM inserted`,
+      transaction`SELECT status, subscription_id AS id,
+          subscription_name AS name, destination_name, event_types,
+          connector_ids, active, created_at
+        FROM create_webhook_subscription(
+          ${input.tenantId}::uuid,${input.userId}::uuid,${input.values.name},
+          ${input.values.destinationName},${input.values.eventTypes}::text[],
+          ${input.values.connectorIds}::uuid[],${input.activeLimit}
+        )`,
     ]);
     const row = (rows as Record<string, unknown>[])[0];
-    if (!row) throw new Error("connector-denied");
+    if (!row) throw new Error("Subscription creation returned no result");
+    const status = String(row.status);
+    if (status !== "created") {
+      const messages = {
+        "connector-denied": "A connector is not available in this workspace",
+        "duplicate-subscription":
+          "An equivalent active webhook subscription already exists",
+        "subscription-name-conflict":
+          "A webhook subscription already uses this name",
+        "subscription-limit-exceeded":
+          "The active webhook subscription limit has been reached",
+      } as const;
+      const code = status as keyof typeof messages;
+      throw new TransactionalEventError(code, messages[code]);
+    }
     return subscription(row);
   }
 
@@ -74,37 +76,12 @@ export class NeonTransactionalEventRepository implements TransactionalEventRepos
     input: Parameters<TransactionalEventRepository["disableSubscription"]>[0],
   ) {
     const [rows = []] = await withTenant(input.tenantId, (transaction) => [
-      transaction`WITH updated AS (
-        UPDATE webhook_subscriptions SET active=false,updated_at=now()
-        WHERE tenant_id=${input.tenantId}::uuid AND id=${input.subscriptionId}::uuid AND active
-        RETURNING id
-      ), dead AS (
-        UPDATE webhook_deliveries AS delivery
-        SET state='dead-lettered',last_error_code='subscription-disabled',
-          completed_at=now(),updated_at=now()
-        FROM updated
-        WHERE delivery.tenant_id=${input.tenantId}::uuid
-          AND delivery.subscription_id=updated.id
-          AND delivery.state IN ('pending','retrying')
-        RETURNING delivery.id
-      ), audited AS (
-        INSERT INTO audit_events(
-          tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
-        ) SELECT
-          ${input.tenantId}::uuid,'human-session',${input.userId}::uuid,
-          'webhook.subscription.disable',
-          'webhook-subscription',updated.id,'succeeded','{}'::jsonb
-        FROM updated
-      ), dead_audited AS (
-        INSERT INTO audit_events(
-          tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
-        ) SELECT
-          ${input.tenantId}::uuid,'human-session',${input.userId}::uuid,
-          'webhook.delivery','webhook-delivery',dead.id,'dead-lettered','{}'::jsonb
-        FROM dead
-      ) SELECT id FROM updated`,
+      transaction`SELECT disable_webhook_subscription(
+        ${input.tenantId}::uuid,${input.userId}::uuid,
+        ${input.subscriptionId}::uuid
+      ) AS disabled`,
     ]);
-    return (rows as unknown[]).length === 1;
+    return Boolean((rows[0] as { disabled?: boolean } | undefined)?.disabled);
   }
 
   async enqueue(input: Parameters<TransactionalEventRepository["enqueue"]>[0]) {
@@ -123,19 +100,38 @@ export class NeonTransactionalEventRepository implements TransactionalEventRepos
       if (!row) throw new Error("Event enqueue returned no row");
       return { eventId: row.event_id, created: row.was_created };
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        String(error.code) === "P0002"
-      ) {
-        const { TransactionalEventError } =
-          await import("@/lib/transactional-events");
+      const databaseCode =
+        typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : undefined;
+      const message = error instanceof Error ? error.message : "";
+      if (databaseCode === "P0002") {
         throw new TransactionalEventError(
           "idempotency-conflict",
           "The idempotency key was used for another event",
         );
       }
+      if (databaseCode === "P0001") {
+        throw new TransactionalEventError(
+          "quota-exceeded",
+          "API key quota exceeded",
+        );
+      }
+      if (databaseCode === "28000")
+        throw new TransactionalEventError(
+          "authentication-required",
+          "The consumer API key is inactive",
+        );
+      if (databaseCode === "42501" && message.includes("scope"))
+        throw new TransactionalEventError(
+          "scope-denied",
+          "API key scope denied",
+        );
+      if (databaseCode === "42501" && message.includes("Connector"))
+        throw new TransactionalEventError(
+          "connector-denied",
+          "Connector binding denied",
+        );
       throw error;
     }
   }

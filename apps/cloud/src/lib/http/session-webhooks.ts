@@ -7,8 +7,14 @@ import { ZodError, z } from "zod";
 
 import { NeonTransactionalEventRepository } from "@/lib/adapters/neon-transactional-events";
 import { isTrustedHumanMutationOrigin } from "@/lib/auth";
-import { getWebhookDestinations } from "@/lib/env";
-import type { TransactionalEventRepository } from "@/lib/transactional-events";
+import {
+  getWebhookDestinations,
+  getWebhookMaxActiveSubscriptions,
+} from "@/lib/env";
+import {
+  TransactionalEventError,
+  type TransactionalEventRepository,
+} from "@/lib/transactional-events";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
 import { jsonResponse, problemResponse } from "./problem";
@@ -25,6 +31,7 @@ export function createSessionWebhookHandlers(
   destinationNames: ReadonlySet<string> = new Set(
     getWebhookDestinations().keys(),
   ),
+  activeLimit = getWebhookMaxActiveSubscriptions(),
 ) {
   const failed = (request: Request, error: unknown) => {
     if (error instanceof ZodError)
@@ -34,6 +41,32 @@ export function createSessionWebhookHandlers(
         code: "invalid-request",
         title: "Webhook subscription is invalid",
       });
+    if (error instanceof TransactionalEventError) {
+      if (error.code === "connector-denied")
+        return problemResponse({
+          request,
+          status: 403,
+          code: "connector-denied",
+          title: error.message,
+        });
+      if (error.code === "subscription-limit-exceeded")
+        return problemResponse({
+          request,
+          status: 403,
+          code: error.code,
+          title: error.message,
+        });
+      if (
+        error.code === "duplicate-subscription" ||
+        error.code === "subscription-name-conflict"
+      )
+        return problemResponse({
+          request,
+          status: 409,
+          code: error.code,
+          title: error.message,
+        });
+    }
     if (error instanceof Error && error.message === "connector-denied")
       return problemResponse({
         request,
@@ -97,6 +130,7 @@ export function createSessionWebhookHandlers(
             await repository.createSubscription({
               tenantId: workspace.tenantId,
               userId: workspace.userId,
+              activeLimit,
               values,
             }),
           ),

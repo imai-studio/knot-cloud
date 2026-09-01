@@ -9,9 +9,14 @@ export class TransactionalEventError extends Error {
   constructor(
     readonly code:
       | "idempotency-conflict"
+      | "authentication-required"
       | "destination-denied"
       | "connector-denied"
       | "scope-denied"
+      | "quota-exceeded"
+      | "duplicate-subscription"
+      | "subscription-name-conflict"
+      | "subscription-limit-exceeded"
       | "invalid-request",
     message: string,
   ) {
@@ -34,6 +39,7 @@ export interface TransactionalEventRepository {
   createSubscription(input: {
     tenantId: string;
     userId: string;
+    activeLimit: number;
     values: WebhookSubscriptionCreate;
   }): Promise<WebhookSubscription>;
   disableSubscription(input: {

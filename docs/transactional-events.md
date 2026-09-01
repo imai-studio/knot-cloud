@@ -22,9 +22,15 @@ supply a URL, headers, or signing secret.
 }
 ```
 
-Store that object in `WEBHOOK_DESTINATIONS_JSON`. URLs must be fixed HTTPS URLs without embedded
-credentials, a query, or a fragment. Removing a name causes its pending deliveries to dead-letter;
-it does not redirect them elsewhere.
+Store that object in `WEBHOOK_DESTINATIONS_JSON`. URLs must use a public hostname and fixed HTTPS
+path without embedded credentials, a query, or a fragment. Literal IP addresses and local names
+are rejected. Removing a name causes its pending deliveries to dead-letter; it does not redirect
+them elsewhere.
+
+`WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS` sets the hard per-workspace active-subscription cap (default
+`50`, maximum `1000`). Creation is serialized per workspace, so concurrent requests cannot exceed
+the cap. Knot rejects duplicate active routes and duplicate subscription names with a conflict
+response instead of creating ambiguous fan-out.
 
 Workspace owners and admins create subscriptions with `POST /api/v1/session/webhooks`:
 
@@ -62,9 +68,11 @@ connector. The request is small, typed, time-bounded, and idempotent:
 ```
 
 Postgres commits the event and its delivery rows together. Reusing the same idempotency key and
-body returns the original event. Reusing it with different content fails. Delivery claims use a
-lease fence, bounded exponential backoff, at most ten attempts, and a terminal dead-letter state.
-The maintenance route only drives this durable outbox; it is not another workflow scheduler.
+semantic body returns the original event; `createdAt` may change when a client retries. Reusing the
+key with a different origin or event fails. A replay does not consume another API-key quota unit.
+New events use the API key's durable per-minute and per-day limits. Delivery claims use a lease
+fence, bounded exponential backoff, at most ten attempts, and a terminal dead-letter state. The
+maintenance route only drives this durable outbox; it is not another workflow scheduler.
 
 ## Delivery verification
 

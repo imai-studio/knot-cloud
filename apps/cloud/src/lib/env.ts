@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeAuthority } from "@imai/knot-cloud-contract";
+import { isIP } from "node:net";
 
 const optionalNonEmptyString = (minimumLength = 1) =>
   z.preprocess(
@@ -22,6 +23,12 @@ const coreEnvironmentSchema = z.object({
   IDENTITY_DIGEST_VERSION: z.coerce.number().int().positive().default(1),
   KNOT_SIGNING_AUTHORITIES: optionalNonEmptyString(),
   WEBHOOK_DESTINATIONS_JSON: optionalNonEmptyString(),
+  WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1_000)
+    .default(50),
 });
 
 const appBaseUrlSchema = z.url();
@@ -209,6 +216,19 @@ export function webhookDestinationsFromEnvironment(
     ) {
       throw new Error("Webhook destinations must be fixed HTTPS URLs");
     }
+    const hostname = url.hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+    if (
+      isIP(hostname) !== 0 ||
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".internal") ||
+      hostname.endsWith(".home.arpa")
+    ) {
+      throw new Error(
+        "Webhook destinations must use a public hostname, not a local or literal address",
+      );
+    }
     destinations.set(name, { url: url.toString(), secret: candidate.secret });
   }
   return destinations;
@@ -219,6 +239,10 @@ export function getWebhookDestinations(): ReadonlyMap<
   WebhookDestination
 > {
   return webhookDestinationsFromEnvironment(getCloudEnvironment());
+}
+
+export function getWebhookMaxActiveSubscriptions(): number {
+  return getCloudEnvironment().WEBHOOK_MAX_ACTIVE_SUBSCRIPTIONS;
 }
 
 export function getR2Environment() {

@@ -89,6 +89,158 @@ CREATE POLICY webhook_deliveries_resolver_select ON webhook_deliveries
 CREATE POLICY webhook_subscriptions_resolver_select ON webhook_subscriptions
   FOR SELECT TO knot_resolver USING (true);
 
+CREATE FUNCTION create_webhook_subscription(
+  p_tenant_id uuid,
+  p_user_id uuid,
+  p_name text,
+  p_destination_name text,
+  p_event_types text[],
+  p_connector_ids uuid[],
+  p_active_limit integer
+)
+RETURNS TABLE (
+  status text, subscription_id uuid, subscription_name text,
+  destination_name text, event_types text[], connector_ids uuid[],
+  active boolean, created_at timestamptz
+)
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_subscription webhook_subscriptions%ROWTYPE;
+  v_authorized_count integer;
+  v_active_count integer;
+BEGIN
+  IF p_tenant_id IS DISTINCT FROM
+    nullif(current_setting('app.tenant_id', true), '')::uuid
+  THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Tenant context mismatch';
+  END IF;
+  IF p_active_limit NOT BETWEEN 1 AND 1000
+    OR cardinality(p_connector_ids) NOT BETWEEN 1 AND 100
+    OR cardinality(p_event_types) NOT BETWEEN 1 AND 10
+  THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Invalid subscription limits';
+  END IF;
+
+  -- Serializing on the tenant makes the configured active-subscription cap a
+  -- hard limit even when several admins create subscriptions concurrently.
+  PERFORM 1 FROM tenants WHERE id = p_tenant_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Tenant context mismatch';
+  END IF;
+
+  SELECT count(*)::int INTO v_authorized_count
+  FROM connectors
+  WHERE tenant_id = p_tenant_id
+    AND id = ANY(p_connector_ids)
+    AND revoked_at IS NULL;
+  IF v_authorized_count <> cardinality(p_connector_ids) THEN
+    RETURN QUERY SELECT 'connector-denied',NULL::uuid,NULL::text,NULL::text,
+      NULL::text[],NULL::uuid[],NULL::boolean,NULL::timestamptz;
+    RETURN;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM webhook_subscriptions AS subscription
+    WHERE subscription.tenant_id = p_tenant_id AND subscription.active
+      AND subscription.destination_name = p_destination_name
+      AND subscription.event_types @> p_event_types
+      AND subscription.event_types <@ p_event_types
+      AND subscription.connector_ids @> p_connector_ids
+      AND subscription.connector_ids <@ p_connector_ids
+  ) THEN
+    RETURN QUERY SELECT 'duplicate-subscription',NULL::uuid,NULL::text,NULL::text,
+      NULL::text[],NULL::uuid[],NULL::boolean,NULL::timestamptz;
+    RETURN;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM webhook_subscriptions AS subscription
+    WHERE subscription.tenant_id = p_tenant_id AND subscription.name = p_name
+  ) THEN
+    RETURN QUERY SELECT 'subscription-name-conflict',NULL::uuid,NULL::text,NULL::text,
+      NULL::text[],NULL::uuid[],NULL::boolean,NULL::timestamptz;
+    RETURN;
+  END IF;
+
+  SELECT count(*)::int INTO v_active_count
+  FROM webhook_subscriptions AS subscription
+  WHERE subscription.tenant_id = p_tenant_id AND subscription.active;
+  IF v_active_count >= p_active_limit THEN
+    RETURN QUERY SELECT 'subscription-limit-exceeded',NULL::uuid,NULL::text,NULL::text,
+      NULL::text[],NULL::uuid[],NULL::boolean,NULL::timestamptz;
+    RETURN;
+  END IF;
+
+  INSERT INTO webhook_subscriptions(
+    tenant_id,name,destination_name,event_types,connector_ids,created_by
+  ) VALUES (
+    p_tenant_id,p_name,p_destination_name,p_event_types,p_connector_ids,p_user_id
+  ) RETURNING * INTO v_subscription;
+
+  INSERT INTO audit_events(
+    tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
+  ) VALUES (
+    p_tenant_id,'human-session',p_user_id,'webhook.subscription.create',
+    'webhook-subscription',v_subscription.id,'succeeded',
+    jsonb_build_object('connectors',v_subscription.connector_ids)
+  );
+
+  RETURN QUERY SELECT 'created',v_subscription.id,v_subscription.name,
+    v_subscription.destination_name,v_subscription.event_types,
+    v_subscription.connector_ids,v_subscription.active,v_subscription.created_at;
+END
+$$;
+
+CREATE FUNCTION disable_webhook_subscription(
+  p_tenant_id uuid,
+  p_user_id uuid,
+  p_subscription_id uuid
+)
+RETURNS boolean
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_disabled boolean := false;
+BEGIN
+  IF p_tenant_id IS DISTINCT FROM
+    nullif(current_setting('app.tenant_id', true), '')::uuid
+  THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Tenant context mismatch';
+  END IF;
+
+  UPDATE webhook_subscriptions
+  SET active=false,updated_at=clock_timestamp()
+  WHERE tenant_id=p_tenant_id AND id=p_subscription_id AND active
+  RETURNING true INTO v_disabled;
+  IF NOT v_disabled THEN RETURN false; END IF;
+
+  WITH dead AS (
+    UPDATE webhook_deliveries
+    SET state='dead-lettered',last_error_code='subscription-disabled',
+      lease_token_digest=NULL,lease_expires_at=NULL,
+      completed_at=clock_timestamp(),updated_at=clock_timestamp()
+    WHERE tenant_id=p_tenant_id AND subscription_id=p_subscription_id
+      AND state IN ('pending','retrying','leased')
+    RETURNING id
+  )
+  INSERT INTO audit_events(
+    tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
+  ) SELECT p_tenant_id,'human-session',p_user_id,'webhook.delivery',
+      'webhook-delivery',dead.id,'dead-lettered',
+      jsonb_build_object('reason','subscription-disabled')
+    FROM dead;
+
+  INSERT INTO audit_events(
+    tenant_id,principal_kind,principal_id,action,target_kind,target_id,outcome,metadata
+  ) VALUES (
+    p_tenant_id,'human-session',p_user_id,'webhook.subscription.disable',
+    'webhook-subscription',p_subscription_id,'succeeded','{}'::jsonb
+  );
+  RETURN true;
+END
+$$;
+
 CREATE FUNCTION enqueue_transactional_event(
   p_tenant_id uuid,
   p_api_key_id uuid,
@@ -107,27 +259,90 @@ AS $$
 DECLARE
   v_event_id uuid;
   v_existing_sha text;
+  key_record api_keys%ROWTYPE;
+  minute_count integer;
+  day_count integer;
 BEGIN
-  INSERT INTO transactional_events (
-    tenant_id, api_key_id, connector_id, idempotency_key, request_sha256,
-    event_type, origin_space_id, origin_chat_id, origin_message_id, occurred_at
-  ) VALUES (
-    p_tenant_id, p_api_key_id, p_connector_id, p_idempotency_key, p_request_sha256,
-    p_event_type, p_origin_space_id, p_origin_chat_id, p_origin_message_id, p_occurred_at
-  ) ON CONFLICT (tenant_id, api_key_id, idempotency_key) DO NOTHING
-  RETURNING id INTO v_event_id;
+  IF p_tenant_id IS DISTINCT FROM
+    nullif(current_setting('app.tenant_id', true), '')::uuid
+  THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Tenant context mismatch';
+  END IF;
+  IF p_request_sha256 !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Invalid event metadata';
+  END IF;
 
-  IF v_event_id IS NULL THEN
-    SELECT id, request_sha256 INTO v_event_id, v_existing_sha
-    FROM transactional_events
-    WHERE tenant_id = p_tenant_id AND api_key_id = p_api_key_id
-      AND idempotency_key = p_idempotency_key;
+  -- The credential row serializes replay lookup, quota charging, and insert so
+  -- concurrent retries cannot consume more than one quota unit.
+  SELECT * INTO key_record
+  FROM api_keys
+  WHERE tenant_id = p_tenant_id AND id = p_api_key_id
+  FOR UPDATE;
+  IF NOT FOUND OR key_record.revoked_at IS NOT NULL
+    OR (key_record.expires_at IS NOT NULL AND key_record.expires_at <= clock_timestamp())
+  THEN
+    RAISE EXCEPTION USING ERRCODE = '28000', MESSAGE = 'API key is inactive';
+  END IF;
+  IF NOT 'anytype.chats.read'::scope_name = ANY(key_record.scopes) THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'API key scope denied';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM api_key_connectors AS binding
+    JOIN connectors AS connector
+      ON connector.tenant_id = binding.tenant_id AND connector.id = binding.connector_id
+    WHERE binding.tenant_id = p_tenant_id
+      AND binding.api_key_id = p_api_key_id
+      AND binding.connector_id = p_connector_id
+      AND connector.revoked_at IS NULL
+      AND 'anytype.chats.read'::scope_name = ANY(connector.scopes)
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Connector binding denied';
+  END IF;
+
+  SELECT id, request_sha256 INTO v_event_id, v_existing_sha
+  FROM transactional_events
+  WHERE tenant_id = p_tenant_id AND api_key_id = p_api_key_id
+    AND idempotency_key = p_idempotency_key;
+  IF FOUND THEN
     IF v_existing_sha <> p_request_sha256 THEN
       RAISE EXCEPTION 'event idempotency conflict' USING ERRCODE = 'P0002';
     END IF;
     RETURN QUERY SELECT v_event_id, false;
     RETURN;
   END IF;
+
+  INSERT INTO api_key_usage_windows (
+    tenant_id, api_key_id, window_kind, window_started_at, request_count, expires_at
+  ) VALUES (
+    p_tenant_id, p_api_key_id, 'minute', date_trunc('minute', clock_timestamp()), 1,
+    date_trunc('minute', clock_timestamp()) + interval '2 minutes'
+  )
+  ON CONFLICT (tenant_id, api_key_id, window_kind, window_started_at)
+  DO UPDATE SET request_count = api_key_usage_windows.request_count + 1
+  RETURNING request_count INTO minute_count;
+
+  INSERT INTO api_key_usage_windows (
+    tenant_id, api_key_id, window_kind, window_started_at, request_count, expires_at
+  ) VALUES (
+    p_tenant_id, p_api_key_id, 'day', date_trunc('day', clock_timestamp()), 1,
+    date_trunc('day', clock_timestamp()) + interval '2 days'
+  )
+  ON CONFLICT (tenant_id, api_key_id, window_kind, window_started_at)
+  DO UPDATE SET request_count = api_key_usage_windows.request_count + 1
+  RETURNING request_count INTO day_count;
+
+  IF minute_count > key_record.requests_per_minute OR day_count > key_record.requests_per_day THEN
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'API key quota exceeded';
+  END IF;
+
+  INSERT INTO transactional_events (
+    tenant_id, api_key_id, connector_id, idempotency_key, request_sha256,
+    event_type, origin_space_id, origin_chat_id, origin_message_id, occurred_at
+  ) VALUES (
+    p_tenant_id, p_api_key_id, p_connector_id, p_idempotency_key, p_request_sha256,
+    p_event_type, p_origin_space_id, p_origin_chat_id, p_origin_message_id, p_occurred_at
+  ) RETURNING id INTO v_event_id;
 
   INSERT INTO webhook_deliveries (tenant_id, subscription_id, event_id)
   SELECT p_tenant_id, subscription.id, v_event_id
@@ -293,9 +508,13 @@ END
 $$;
 
 REVOKE ALL ON FUNCTION enqueue_transactional_event(uuid,uuid,uuid,text,text,text,text,text,text,timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION create_webhook_subscription(uuid,uuid,text,text,text[],uuid[],integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION disable_webhook_subscription(uuid,uuid,uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION claim_webhook_delivery(uuid,timestamptz,text,integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION complete_webhook_delivery(uuid,uuid,integer,text,timestamptz,boolean,boolean,integer,text,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION enqueue_transactional_event(uuid,uuid,uuid,text,text,text,text,text,text,timestamptz) TO knot_app;
+GRANT EXECUTE ON FUNCTION create_webhook_subscription(uuid,uuid,text,text,text[],uuid[],integer) TO knot_app;
+GRANT EXECUTE ON FUNCTION disable_webhook_subscription(uuid,uuid,uuid) TO knot_app;
 GRANT EXECUTE ON FUNCTION claim_webhook_delivery(uuid,timestamptz,text,integer) TO knot_app;
 GRANT EXECUTE ON FUNCTION complete_webhook_delivery(uuid,uuid,integer,text,timestamptz,boolean,boolean,integer,text,text) TO knot_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON webhook_subscriptions TO knot_app;

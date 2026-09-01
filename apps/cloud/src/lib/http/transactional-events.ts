@@ -109,7 +109,14 @@ export function createTransactionalEventHandler(dependencies?: {
           "Connector binding denied",
         );
       const requestSha256 = await sha256Hex(
-        canonicalJson(body as unknown as JsonValue),
+        canonicalJson({
+          protocolVersion: body.protocolVersion,
+          connectorId: body.connectorId,
+          idempotencyKey: body.idempotencyKey,
+          occurredAt: body.occurredAt,
+          eventType: body.eventType,
+          channelOrigin: body.channelOrigin,
+        } as unknown as JsonValue),
       );
       const accepted = await events.enqueue({
         tenantId: credential.tenantId,
@@ -129,19 +136,31 @@ export function createTransactionalEventHandler(dependencies?: {
     } catch (error) {
       if (error instanceof TransactionalEventError) {
         const status =
-          error.code === "idempotency-conflict"
-            ? 409
-            : error.code === "invalid-request"
-              ? 400
-              : 403;
+          error.code === "authentication-required"
+            ? 401
+            : error.code === "idempotency-conflict"
+              ? 409
+              : error.code === "quota-exceeded"
+                ? 429
+                : error.code === "invalid-request"
+                  ? 400
+                  : 403;
         const code =
           error.code === "idempotency-conflict"
             ? "conflict"
-            : error.code === "destination-denied" ||
-                error.code === "connector-denied"
-              ? "forbidden"
-              : error.code;
-        return problemResponse({ request, status, code, title: error.message });
+            : error.code === "quota-exceeded"
+              ? "quota-exceeded"
+              : error.code === "destination-denied" ||
+                  error.code === "connector-denied"
+                ? "forbidden"
+                : error.code;
+        return problemResponse({
+          request,
+          status,
+          code,
+          title: error.message,
+          ...(status === 429 ? { retryable: true, retryAfterSeconds: 60 } : {}),
+        });
       }
       if (error instanceof ConsumerDataError) {
         const status = error.code === "authentication-required" ? 401 : 403;
