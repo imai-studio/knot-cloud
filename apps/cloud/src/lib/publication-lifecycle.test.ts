@@ -311,6 +311,10 @@ describe("publication lifecycle migration", () => {
       tenantA,
       publicationA,
     ]);
+    const initialMaintenance = await database.query<{ tenant_id: string }>(
+      "SELECT tenant_id FROM list_publication_maintenance_tenants(now(), 3600, 10)",
+    );
+    expect(initialMaintenance.rows).toEqual([{ tenant_id: tenantA }]);
 
     const leaseA = "a".repeat(64);
     const leaseB = "b".repeat(64);
@@ -343,6 +347,10 @@ describe("publication lifecycle migration", () => {
         [tenantA, row.outbox_id, leaseA],
       );
     }
+    const rescheduled = await database.query<{ tenant_id: string }>(
+      "SELECT tenant_id FROM list_publication_maintenance_tenants(now(), 3600, 10)",
+    );
+    expect(rescheduled.rows).toEqual([{ tenant_id: tenantA }]);
     const tooEarly = await database.query<{ done: boolean }>(
       "SELECT finalize_unpublished_publication($1, $2) AS done",
       [tenantA, publicationA],

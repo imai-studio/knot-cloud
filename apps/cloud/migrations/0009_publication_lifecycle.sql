@@ -841,6 +841,15 @@ BEGIN
     UPDATE assets SET deleted_at = requested_now
     WHERE tenant_id = requested_tenant_id AND id = completed_asset_id;
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM deletion_outbox
+    WHERE tenant_id = requested_tenant_id
+      AND completed_at IS NULL
+      AND dead_lettered_at IS NULL
+  ) THEN
+    PERFORM schedule_publication_maintenance(requested_tenant_id, requested_now);
+  END IF;
   RETURN true;
 END
 $$;
