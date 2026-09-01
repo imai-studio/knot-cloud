@@ -69,6 +69,7 @@ describe("connector command HTTP service", () => {
         createdByKind: "consumer-api-key",
         actorDigest: "a".repeat(64),
         actorDigestVersion: 1,
+        actorProvenance: "consumer-api-key",
         createdAt: new Date("2026-09-01T00:00:00Z"),
         notBefore: new Date("2026-09-01T00:00:00Z"),
         expiresAt: new Date("2026-09-01T00:10:00Z"),
@@ -104,7 +105,7 @@ describe("connector command HTTP service", () => {
     expect(claim).toHaveBeenCalledTimes(1);
   });
 
-  it("maps a legacy command without actor provenance to an untrusted sentinel", async () => {
+  it("preserves the explicit unverified legacy sentinel provenance", async () => {
     const claim = vi.fn<CommandLedger["claim"]>().mockResolvedValue({
       commandId,
       requiredScope: "anytype.objects.read",
@@ -117,8 +118,9 @@ describe("connector command HTTP service", () => {
         },
       },
       createdByKind: "first-party-service",
-      actorDigest: null,
-      actorDigestVersion: null,
+      actorDigest: "0".repeat(64),
+      actorDigestVersion: 1,
+      actorProvenance: "unverified-legacy",
       createdAt: new Date("2026-09-01T00:00:00Z"),
       notBefore: new Date("2026-09-01T00:00:00Z"),
       expiresAt: new Date("2026-09-01T00:10:00Z"),
@@ -140,7 +142,7 @@ describe("connector command HTTP service", () => {
     expect(body.commands[0]?.actor).toEqual({
       principalDigest: "0".repeat(64),
       digestVersion: 1,
-      provenance: "first-party-service",
+      provenance: "unverified-legacy",
     });
   });
 
@@ -173,6 +175,7 @@ describe("connector command HTTP service", () => {
       createdByKind: "consumer-api-key",
       actorDigest: "a".repeat(64),
       actorDigestVersion: 1,
+      actorProvenance: "consumer-api-key",
       createdAt: new Date("2026-09-01T00:00:00Z"),
       notBefore: new Date("2026-09-01T00:00:00Z"),
       expiresAt: new Date("2026-09-01T00:10:00Z"),

@@ -66,14 +66,14 @@ export async function authenticateConsumerApiKey(input: {
   return record;
 }
 
-export function digestConsumerActor(keyId: string): {
+export function digestConsumerActor(apiKeyId: string): {
   digest: string;
   version: number;
 } {
   const environment = getCloudEnvironment();
   return {
     digest: createHmac("sha256", environment.IDENTITY_DIGEST_PEPPER)
-      .update(`consumer-api-key:${keyId}`, "utf8")
+      .update(`consumer-api-key:${apiKeyId}`, "utf8")
       .digest("hex"),
     version: environment.IDENTITY_DIGEST_VERSION,
   };

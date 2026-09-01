@@ -9,6 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createConsumerOperationHandlers } from "./consumer-operations";
 
+vi.mock("@/lib/env", () => ({
+  getAppBaseUrl: () => "https://knot.test",
+}));
+
 const now = new Date("2026-09-01T12:00:00Z");
 const tenantId = "00000000-0000-4000-8000-000000000001";
 const apiKeyId = "00000000-0000-4000-8000-000000000002";
@@ -74,10 +78,11 @@ describe("consumer Anytype operations", () => {
   });
 
   it("accepts only a typed operation and returns its durable command ID", async () => {
+    const actorDigest = vi.fn(() => ({ digest: "a".repeat(64), version: 1 }));
     const handlers = createConsumerOperationHandlers({
       repository: data,
       authenticate: () => Promise.resolve(credential),
-      actorDigest: () => ({ digest: "a".repeat(64), version: 1 }),
+      actorDigest,
       now: () => now,
     });
     const response = await handlers.submit(
@@ -101,6 +106,59 @@ describe("consumer Anytype operations", () => {
         actorDigest: "a".repeat(64),
       }),
     );
+    expect(actorDigest).toHaveBeenCalledWith(apiKeyId);
+  });
+
+  it("returns the durable state and a 200 response for an idempotent replay", async () => {
+    vi.mocked(data.enqueueOperation).mockResolvedValue({
+      commandId,
+      state: "leased",
+      created: false,
+    });
+    const response = await createConsumerOperationHandlers({
+      repository: data,
+      authenticate: () => Promise.resolve(credential),
+      actorDigest: () => ({ digest: "a".repeat(64), version: 1 }),
+      now: () => now,
+    }).submit(
+      request({
+        type: "object.read",
+        spaceId: "space-1",
+        objectId: "object-1",
+      }),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "leased" });
+  });
+
+  it("cancels a streamed body once it exceeds the configured bound", async () => {
+    let cancelled = false;
+    const oversized = new Request("https://attacker.test/api/v1/operations", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+      body: new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(128 * 1024));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await createConsumerOperationHandlers({
+      repository: data,
+      authenticate: () => Promise.resolve(credential),
+    }).submit(oversized);
+    expect(response.status).toBe(413);
+    expect(cancelled).toBe(true);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "payload-too-large",
+      type: "https://knot.test/problems/payload-too-large",
+    });
   });
 
   it("rejects arbitrary execution, scope mismatch, and connector mismatch", async () => {

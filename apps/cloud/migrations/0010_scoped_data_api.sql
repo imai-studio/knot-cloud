@@ -11,9 +11,7 @@ ALTER TABLE api_keys
 ALTER TABLE commands
   ADD COLUMN actor_digest text CHECK (actor_digest ~ '^[a-f0-9]{64}$'),
   ADD COLUMN actor_digest_version smallint CHECK (actor_digest_version > 0),
-  ADD CONSTRAINT commands_actor_digest_pair CHECK (
-    (actor_digest IS NULL) = (actor_digest_version IS NULL)
-  );
+  ADD COLUMN actor_provenance text;
 
 -- Existing commands predate authenticated actor envelopes. Preserve them with an
 -- explicit, non-authorizing sentinel so connectors can reject them by local
@@ -22,9 +20,37 @@ ALTER TABLE commands
 -- normal owner bypass while performing this all-tenant data migration.
 ALTER TABLE commands NO FORCE ROW LEVEL SECURITY;
 UPDATE commands
-SET actor_digest = repeat('0', 64), actor_digest_version = 1
+SET actor_digest = repeat('0', 64),
+    actor_digest_version = 1,
+    actor_provenance = 'unverified-legacy'
 WHERE actor_digest IS NULL;
 ALTER TABLE commands FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE commands
+  ALTER COLUMN actor_digest SET DEFAULT repeat('0', 64),
+  ALTER COLUMN actor_digest SET NOT NULL,
+  ALTER COLUMN actor_digest_version SET DEFAULT 1,
+  ALTER COLUMN actor_digest_version SET NOT NULL,
+  ALTER COLUMN actor_provenance SET DEFAULT 'unverified-legacy',
+  ALTER COLUMN actor_provenance SET NOT NULL,
+  ADD CONSTRAINT commands_actor_provenance CHECK (
+    (
+      actor_provenance = 'unverified-legacy'
+      AND actor_digest = repeat('0', 64)
+      AND actor_digest_version = 1
+    ) OR (
+      actor_provenance IN (
+        'authenticated-cloud-session', 'connector-key',
+        'consumer-api-key', 'first-party-service'
+      )
+      AND actor_digest <> repeat('0', 64)
+      AND actor_provenance = CASE
+        WHEN created_by_kind = 'human-session'
+          THEN 'authenticated-cloud-session'
+        ELSE created_by_kind::text
+      END
+    )
+  );
 
 CREATE TABLE api_key_usage_windows (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -323,6 +349,31 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'Connector binding denied';
   END IF;
 
+  -- A byte-identical retry returns the durable operation without consuming a
+  -- second quota unit. Credential, scope, and connector checks above still run
+  -- on every replay so revoked or narrowed authority cannot be bypassed.
+  SELECT record.request_sha256, command.id, command.state
+  INTO existing_request_sha256, existing_command_id, existing_command_state
+  FROM idempotency_records AS record
+  JOIN commands AS command
+    ON command.tenant_id = record.tenant_id
+    AND command.created_by_kind = record.credential_kind
+    AND command.created_by_id = record.credential_id
+    AND command.idempotency_key = record.idempotency_key
+  WHERE record.tenant_id = p_tenant_id
+    AND record.credential_kind = 'consumer-api-key'
+    AND record.credential_id = p_api_key_id
+    AND record.idempotency_key = p_idempotency_key
+    AND record.expires_at > clock_timestamp();
+
+  IF FOUND THEN
+    IF existing_request_sha256 <> p_request_sha256 THEN
+      RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'Idempotency key payload mismatch';
+    END IF;
+    RETURN QUERY SELECT existing_command_id, existing_command_state, false;
+    RETURN;
+  END IF;
+
   INSERT INTO api_key_usage_windows (
     tenant_id, api_key_id, window_kind, window_started_at, request_count, expires_at
   ) VALUES (
@@ -347,37 +398,15 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'API key quota exceeded';
   END IF;
 
-  SELECT record.request_sha256, command.id, command.state
-  INTO existing_request_sha256, existing_command_id, existing_command_state
-  FROM idempotency_records AS record
-  JOIN commands AS command
-    ON command.tenant_id = record.tenant_id
-    AND command.created_by_kind = record.credential_kind
-    AND command.created_by_id = record.credential_id
-    AND command.idempotency_key = record.idempotency_key
-  WHERE record.tenant_id = p_tenant_id
-    AND record.credential_kind = 'consumer-api-key'
-    AND record.credential_id = p_api_key_id
-    AND record.idempotency_key = p_idempotency_key
-    AND record.expires_at > clock_timestamp();
-
-  IF FOUND THEN
-    IF existing_request_sha256 <> p_request_sha256 THEN
-      RAISE EXCEPTION USING ERRCODE = '23505', MESSAGE = 'Idempotency key payload mismatch';
-    END IF;
-    RETURN QUERY SELECT existing_command_id, existing_command_state, false;
-    RETURN;
-  END IF;
-
   INSERT INTO commands (
     id, tenant_id, connector_id, required_scope, payload, not_before, expires_at,
     idempotency_key, created_by_kind, created_by_id, actor_digest,
-    actor_digest_version, created_at, updated_at
+    actor_digest_version, actor_provenance, created_at, updated_at
   ) VALUES (
     new_command_id, p_tenant_id, p_connector_id, p_required_scope,
     jsonb_build_object('domain', 'anytype', 'operation', p_operation),
     p_created_at, p_expires_at, p_idempotency_key, 'consumer-api-key', p_api_key_id,
-    p_actor_digest, p_actor_digest_version, p_created_at, p_created_at
+    p_actor_digest, p_actor_digest_version, 'consumer-api-key', p_created_at, p_created_at
   );
 
   INSERT INTO idempotency_records (

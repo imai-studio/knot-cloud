@@ -139,4 +139,29 @@ describe("human API-key controls", () => {
       ).status,
     ).toBe(403);
   });
+
+  it.each([
+    { role: "owner", suspended: true },
+    { role: "billing-admin", suspended: false },
+  ])("denies suspended and unknown future roles: $role", async (workspace) => {
+    vi.mocked(getAuthorizedWorkspace).mockResolvedValue({
+      identity: {
+        session: { id: "session" },
+        user: { id: "auth-user", email: "denied@example.test", name: "Denied" },
+      },
+      workspace: {
+        tenantId,
+        userId,
+        name: "Personal workspace",
+        ...workspace,
+      },
+    } as Awaited<ReturnType<typeof getAuthorizedWorkspace>>);
+    expect(
+      (
+        await createSessionApiKeyHandlers(repository()).list(
+          new Request("https://knot.test"),
+        )
+      ).status,
+    ).toBe(403);
+  });
 });

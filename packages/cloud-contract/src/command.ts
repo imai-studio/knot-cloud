@@ -40,6 +40,7 @@ export const commandActorProvenanceSchema = z.enum([
   "connector-key",
   "consumer-api-key",
   "first-party-service",
+  "unverified-legacy",
 ]);
 
 export const commandActorSchema = z
@@ -96,7 +97,28 @@ export const commandEnvelopeSchema = z
       value.createdBy === "human-session"
         ? "authenticated-cloud-session"
         : value.createdBy;
-    if (value.actor.provenance !== expectedProvenance) {
+    const isLegacySentinel =
+      value.actor.principalDigest === "0".repeat(64) &&
+      value.actor.digestVersion === 1;
+    if (value.actor.provenance === "unverified-legacy" && !isLegacySentinel) {
+      context.addIssue({
+        code: "custom",
+        path: ["actor"],
+        message: "Unverified legacy provenance requires the legacy sentinel",
+      });
+    } else if (
+      value.actor.provenance !== "unverified-legacy" &&
+      isLegacySentinel
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["actor", "provenance"],
+        message: "The legacy sentinel requires unverified-legacy provenance",
+      });
+    } else if (
+      value.actor.provenance !== "unverified-legacy" &&
+      value.actor.provenance !== expectedProvenance
+    ) {
       context.addIssue({
         code: "custom",
         path: ["actor", "provenance"],

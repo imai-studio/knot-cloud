@@ -279,6 +279,50 @@ describe("typed remote operations", () => {
       }),
     ).toThrow(/provenance must be consumer-api-key/u);
   });
+
+  it("reserves the legacy actor sentinel for explicit unverified provenance", () => {
+    const command = {
+      protocolVersion,
+      commandId: "00000000-0000-4000-8000-000000000051",
+      connectorId: "connector-1",
+      requiredScope: "anytype.objects.read",
+      createdBy: "first-party-service",
+      actor: {
+        principalDigest: "0".repeat(64),
+        digestVersion: 1,
+        provenance: "unverified-legacy",
+      },
+      createdAt: 1_788_192_000,
+      notBefore: 1_788_192_000,
+      expiresAt: 1_788_192_600,
+      attempt: 1,
+      leaseToken: "active-lease-token-0000000000000001",
+      leaseExpiresAt: 1_788_192_060,
+      payload: {
+        domain: "anytype",
+        operation: {
+          type: "object.read",
+          spaceId: "space-1",
+          objectId: "object-1",
+        },
+      },
+    } as const;
+    expect(commandEnvelopeSchema.parse(command).actor.provenance).toBe(
+      "unverified-legacy",
+    );
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        ...command,
+        actor: { ...command.actor, provenance: "first-party-service" },
+      }),
+    ).toThrow(/legacy sentinel requires unverified-legacy/u);
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        ...command,
+        actor: { ...command.actor, principalDigest: "a".repeat(64) },
+      }),
+    ).toThrow(/requires the legacy sentinel/u);
+  });
 });
 
 describe("pairing identifiers", () => {

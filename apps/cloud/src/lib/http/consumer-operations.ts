@@ -22,8 +22,10 @@ import {
   authenticateConsumerApiKey,
   digestConsumerActor,
 } from "@/lib/security/consumer-api-key";
+import { getAppBaseUrl } from "@/lib/env";
 
-import { jsonResponse, problemResponse } from "./problem";
+import { readBoundedBody } from "./bounded-body";
+import { HttpProblem, jsonResponse, problemResponse } from "./problem";
 
 const maximumBodyBytes = 256 * 1024;
 
@@ -32,7 +34,7 @@ export interface ConsumerOperationDependencies {
   authenticate?: (
     authorization: string | null,
   ) => Promise<ResolvedConsumerApiKey>;
-  actorDigest?: (keyId: string) => { digest: string; version: number };
+  actorDigest?: (apiKeyId: string) => { digest: string; version: number };
   now?: () => Date;
 }
 
@@ -51,10 +53,7 @@ async function readJson(request: Request): Promise<unknown> {
   ) {
     throw new ConsumerDataError("invalid-request", "Request body is too large");
   }
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > maximumBodyBytes) {
-    throw new ConsumerDataError("invalid-request", "Request body is too large");
-  }
+  const bytes = await readBoundedBody(request, maximumBodyBytes);
   try {
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
@@ -133,6 +132,16 @@ export function createConsumerOperationHandlers(
           title: "Request body does not match the Anytype operation protocol",
         });
       }
+      if (error instanceof HttpProblem) {
+        return problemResponse({
+          request,
+          status: error.status,
+          code: error.code,
+          title: error.message,
+          retryable: error.retryable,
+          retryAfterSeconds: error.retryAfterSeconds,
+        });
+      }
       return problemResponse({
         request,
         status: 500,
@@ -171,7 +180,7 @@ export function createConsumerOperationHandlers(
         const requestSha256 = await sha256Hex(
           canonicalJson(body as unknown as JsonValue),
         );
-        const actor = actorDigest(credential.keyId);
+        const actor = actorDigest(credential.id);
         const result = await dependencies.repository.enqueueOperation({
           tenantId: credential.tenantId,
           apiKeyId: credential.id,
@@ -189,12 +198,12 @@ export function createConsumerOperationHandlers(
           operationAcceptedSchema.parse({
             protocolVersion,
             operationId: result.commandId,
-            status: "pending",
+            status: result.state,
             statusUrl: `/api/v1/operations/${result.commandId}`,
             createdAt: body.createdAt,
             expiresAt: body.expiresAt,
           }),
-          202,
+          result.created ? 202 : 200,
         );
       });
     },
@@ -266,7 +275,7 @@ export function createConsumerOperationHandlers(
               problem: problemDetailsSchema.parse({
                 type: new URL(
                   `/problems/${encodeURIComponent(failureCode)}`,
-                  request.url,
+                  getAppBaseUrl(),
                 ).toString(),
                 title: "The local connector could not complete the operation",
                 status: 502,

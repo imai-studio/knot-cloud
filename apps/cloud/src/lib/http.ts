@@ -2,6 +2,7 @@ import {
   problemDetailsSchema,
   type ProblemDetails,
 } from "@imai/knot-cloud-contract";
+import { getAppBaseUrl } from "@/lib/env";
 
 export function problemResponse(
   request: Request,
@@ -13,8 +14,9 @@ export function problemResponse(
     headers?: HeadersInit;
   },
 ) {
+  void request;
   const body = problemDetailsSchema.parse({
-    type: new URL(`/problems/${input.code}`, request.url).toString(),
+    type: new URL(`/problems/${input.code}`, getAppBaseUrl()).toString(),
     title: input.title,
     status: input.status,
     code: input.code,

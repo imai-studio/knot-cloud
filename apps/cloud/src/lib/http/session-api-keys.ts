@@ -12,6 +12,7 @@ import { getApiKeyPeppers } from "@/lib/env";
 import { isTrustedHumanMutationOrigin } from "@/lib/auth";
 import { createApiKey } from "@/lib/security/api-key";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
+import { canManageConnectors } from "@/lib/pairing";
 
 import { jsonResponse, problemResponse } from "./problem";
 
@@ -31,7 +32,7 @@ function currentPepper() {
 async function authorize(request: Request, mutation: boolean) {
   if (mutation && !isTrustedHumanMutationOrigin(request)) return null;
   const authorized = await getAuthorizedWorkspace(request.headers);
-  if (!authorized || authorized.workspace.role === "member") return null;
+  if (!authorized || !canManageConnectors(authorized)) return null;
   return authorized.workspace;
 }
 

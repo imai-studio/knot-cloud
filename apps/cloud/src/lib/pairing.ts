@@ -109,7 +109,10 @@ const pairingLifetimeSeconds = 10 * 60;
 const pollAfterSeconds = 3;
 
 export function canManageConnectors(authorized: AuthorizedWorkspace): boolean {
-  return ["owner", "admin"].includes(authorized.workspace.role);
+  return (
+    !authorized.workspace.suspended &&
+    ["owner", "admin"].includes(authorized.workspace.role)
+  );
 }
 
 export async function createPairingSession(

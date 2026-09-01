@@ -135,11 +135,22 @@ const operationResourceBaseShape = {
   expiresAt: unixSecondsSchema,
 };
 
+const operationSubmissionStateSchema = z.enum([
+  "pending",
+  "leased",
+  "succeeded",
+  "rejected-by-local-policy",
+  "failed",
+  "expired",
+  "cancelled",
+  "dead-lettered",
+]);
+
 export const operationAcceptedSchema = z
   .object({
     protocolVersion: z.literal(protocolVersion),
     operationId: opaqueIdSchema,
-    status: z.literal("pending"),
+    status: operationSubmissionStateSchema,
     statusUrl: z.string().startsWith("/api/v1/operations/"),
     createdAt: unixSecondsSchema,
     expiresAt: unixSecondsSchema,

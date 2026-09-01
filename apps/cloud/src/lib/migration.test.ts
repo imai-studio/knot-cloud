@@ -122,12 +122,18 @@ describe("migration plan", () => {
       const actor = await database.query<{
         actor_digest: string;
         actor_digest_version: number;
+        actor_provenance: string;
       }>(`
-        SELECT actor_digest, actor_digest_version::int AS actor_digest_version
+        SELECT actor_digest, actor_digest_version::int AS actor_digest_version,
+          actor_provenance
         FROM commands WHERE idempotency_key = 'pre-0010-command'
       `);
       expect(actor.rows).toEqual([
-        { actor_digest: "0".repeat(64), actor_digest_version: 1 },
+        {
+          actor_digest: "0".repeat(64),
+          actor_digest_version: 1,
+          actor_provenance: "unverified-legacy",
+        },
       ]);
     } finally {
       await database.close();
@@ -521,13 +527,55 @@ describe("P0 database isolation", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("makes actor provenance non-null and binds the legacy sentinel", async () => {
+    const command = "00000000-0000-4000-8000-000000000063";
+    await database.exec(`
+      INSERT INTO commands (
+        id, tenant_id, connector_id, required_scope, payload, not_before,
+        expires_at, idempotency_key, created_by_kind, created_by_id
+      ) VALUES (
+        '${command}', '${tenantA}', '${connectorA}', 'anytype.objects.read',
+        '{"domain":"anytype","operation":{"type":"object.read"}}', now(),
+        now() + interval '1 hour', 'legacy-default-command',
+        'first-party-service', '00000000-0000-4000-8000-000000000099'
+      )
+    `);
+    const actor = await database.query<{
+      actor_digest: string;
+      actor_digest_version: number;
+      actor_provenance: string;
+    }>(`
+      SELECT actor_digest, actor_digest_version::int AS actor_digest_version,
+        actor_provenance FROM commands WHERE id = '${command}'
+    `);
+    expect(actor.rows).toEqual([
+      {
+        actor_digest: "0".repeat(64),
+        actor_digest_version: 1,
+        actor_provenance: "unverified-legacy",
+      },
+    ]);
+    await expect(
+      database.exec(`
+        UPDATE commands SET actor_provenance = 'first-party-service'
+        WHERE id = '${command}'
+      `),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      database.exec(`
+        UPDATE commands SET actor_digest = NULL, actor_digest_version = NULL,
+          actor_provenance = NULL WHERE id = '${command}'
+      `),
+    ).rejects.toMatchObject({ code: "23502" });
+  });
+
   it("enqueues consumer operations with tenant, scope, connector, idempotency, and quota fences", async () => {
     await database.exec(`
       UPDATE connectors
       SET scopes = '{anytype.objects.read}'
       WHERE id = '${connectorA}';
       UPDATE api_keys
-      SET scopes = '{anytype.objects.read}', requests_per_minute = 3, requests_per_day = 10
+      SET scopes = '{anytype.objects.read}', requests_per_minute = 2, requests_per_day = 10
       WHERE id = '${apiKeyA}';
       INSERT INTO api_key_connectors (tenant_id, api_key_id, connector_id)
       VALUES ('${tenantA}', '${apiKeyA}', '${connectorA}');
@@ -618,14 +666,28 @@ describe("P0 database isolation", () => {
     const commandActor = await database.query<{
       actor_digest: string;
       actor_digest_version: number;
+      actor_provenance: string;
     }>(
-      `SELECT actor_digest, actor_digest_version::int AS actor_digest_version
+      `SELECT actor_digest, actor_digest_version::int AS actor_digest_version,
+        actor_provenance
        FROM commands WHERE tenant_id = $1 AND id = $2`,
       [tenantA, first.rows[0]!.command_id],
     );
     expect(commandActor.rows).toEqual([
-      { actor_digest: "a".repeat(64), actor_digest_version: 1 },
+      {
+        actor_digest: "a".repeat(64),
+        actor_digest_version: 1,
+        actor_provenance: "consumer-api-key",
+      },
     ]);
+
+    const usage = await database.query<{ request_count: number }>(
+      `SELECT request_count::int AS request_count
+       FROM api_key_usage_windows
+       WHERE tenant_id = $1 AND api_key_id = $2 AND window_kind = 'minute'`,
+      [tenantA, apiKeyA],
+    );
+    expect(usage.rows).toEqual([{ request_count: 2 }]);
 
     await database.query("SELECT set_config('app.tenant_id', $1, false)", [
       tenantB,

@@ -13,8 +13,9 @@ interface ClaimedCommandRow {
   required_scope: string;
   payload: unknown;
   created_by_kind: string;
-  actor_digest: string | null;
-  actor_digest_version: number | null;
+  actor_digest: string;
+  actor_digest_version: number;
+  actor_provenance: string;
   created_at: Date;
   not_before: Date;
   expires_at: Date;
@@ -107,7 +108,8 @@ export class NeonCommandLedger implements CommandLedger {
             ${input.leaseSeconds}
           )
         )
-        SELECT claimed.*, command.actor_digest, command.actor_digest_version
+        SELECT claimed.*, command.actor_digest, command.actor_digest_version,
+          command.actor_provenance
         FROM claimed
         JOIN commands AS command
           ON command.tenant_id = ${input.tenantId}::uuid
@@ -123,6 +125,7 @@ export class NeonCommandLedger implements CommandLedger {
       createdByKind: row.created_by_kind,
       actorDigest: row.actor_digest,
       actorDigestVersion: row.actor_digest_version,
+      actorProvenance: row.actor_provenance,
       createdAt: row.created_at,
       notBefore: row.not_before,
       expiresAt: row.expires_at,
