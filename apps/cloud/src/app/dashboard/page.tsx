@@ -3,16 +3,13 @@ import {
   ArrowUpRight,
   Bot,
   Check,
-  CircleDashed,
-  Code2,
   FileText,
   Globe2,
   KeyRound,
-  Plus,
+  ShieldCheck,
 } from "lucide-react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
-import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -20,42 +17,79 @@ import { AccountMenu } from "@/components/account-menu";
 import { Brand } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { getAuthorizedSession } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
 
-const metrics = [
-  { icon: Bot, label: "Connectors", value: "0", detail: "No agents paired" },
+const availableResources = [
   {
-    icon: Globe2,
-    label: "Published sites",
-    value: "0",
-    detail: "Nothing live yet",
+    detail: "Confirms the deployed service can answer requests.",
+    href: "/api/health",
+    label: "Service health",
+    value: "Live endpoint",
   },
-  { icon: KeyRound, label: "API keys", value: "0", detail: "No active keys" },
+  {
+    detail: "Returns the versioned protocol and capability manifest.",
+    href: "/api/v1/meta",
+    label: "Protocol metadata",
+    value: "Versioned JSON",
+  },
+  {
+    detail: "Prepare a local runtime using the released Knot CLI.",
+    href: "https://github.com/imai-studio/knot/blob/main/docs/agent-setup.md",
+    label: "Local Knot setup",
+    value: "Operator guide",
+  },
 ] as const;
 
 const navItems = [
-  { icon: Activity, label: "Overview", active: true },
-  { icon: Bot, label: "Connectors", active: false },
-  { icon: Globe2, label: "Sites", active: false },
-  { icon: KeyRound, label: "API keys", active: false },
-  { icon: FileText, label: "Audit log", active: false },
+  { href: "/dashboard", icon: Activity, id: "overview", label: "Overview" },
+  {
+    href: "/dashboard?view=connectors",
+    icon: Bot,
+    id: "connectors",
+    label: "Connectors",
+  },
+  {
+    href: "/dashboard?view=sites",
+    icon: Globe2,
+    id: "sites",
+    label: "Sites",
+  },
+  {
+    href: "/dashboard?view=api-keys",
+    icon: KeyRound,
+    id: "api-keys",
+    label: "API keys",
+  },
+  {
+    href: "/dashboard?view=audit-log",
+    icon: FileText,
+    id: "audit-log",
+    label: "Audit log",
+  },
 ] as const;
 
-export default async function DashboardPage() {
+type DashboardView = (typeof navItems)[number]["id"];
+
+function resolveDashboardView(value: string | string[] | undefined) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return navItems.some((item) => item.id === candidate)
+    ? (candidate as DashboardView)
+    : "overview";
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string | string[] }>;
+}) {
   const session = await getAuthorizedSession(await headers());
   if (!session) redirect("/login");
+  const view = resolveDashboardView((await searchParams).view);
+  const activeItem = navItems.find((item) => item.id === view) ?? navItems[0];
 
   return (
     <div className="min-h-screen bg-muted/35 lg:grid lg:grid-cols-[240px_1fr]">
@@ -64,204 +98,225 @@ export default async function DashboardPage() {
           <Brand href="/dashboard" />
         </div>
         <nav className="flex-1 space-y-1 p-3" aria-label="Dashboard navigation">
-          {navItems.map(({ icon: Icon, label, active }) => (
-            <button
-              key={label}
-              type="button"
-              disabled={!active}
-              className={cn(
-                "flex min-h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm font-medium transition-colors",
-                active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground",
-              )}
-            >
-              <Icon className="size-4" />
-              {label}
-            </button>
-          ))}
+          {navItems.map(({ href, icon: Icon, id, label }) => {
+            const active = id === view;
+            return (
+              <Link
+                key={label}
+                href={href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex min-h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-accent/55 hover:text-sidebar-foreground",
+                )}
+              >
+                <Icon className="size-4" />
+                {label}
+              </Link>
+            );
+          })}
         </nav>
-        <div className="border-t p-4">
-          <div className="rounded-lg border bg-background p-3">
-            <div className="flex items-center gap-2 text-xs font-medium">
-              <span className="size-2 rounded-full bg-primary/70" />
-              Infrastructure configured
-            </div>
-            <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
-              Live health checks will appear here when monitoring is enabled.
-            </p>
-          </div>
-        </div>
       </aside>
 
       <div className="min-w-0">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-background/90 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
           <Brand className="lg:hidden" href="/dashboard" />
           <div className="hidden lg:block">
-            <p className="text-sm font-medium">Workspace overview</p>
+            <p className="text-sm font-medium">{activeItem.label}</p>
             <p className="text-xs text-muted-foreground">imai</p>
           </div>
           <AccountMenu email={session.user.email} name={session.user.name} />
         </header>
 
+        <nav
+          className="flex gap-1 overflow-x-auto border-b bg-background px-3 py-2 lg:hidden"
+          aria-label="Dashboard navigation"
+        >
+          {navItems.map(({ href, id, label }) => {
+            const active = id === view;
+            return (
+              <Link
+                key={id}
+                href={href}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </Link>
+            );
+          })}
+        </nav>
+
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <Badge variant="outline" className="mb-3 rounded-full">
-                Private beta
-              </Badge>
-              <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-                Welcome to Knot
-              </h1>
-              <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-                Connect a local agent, then publish Anytype objects or issue
-                scoped API access from one place.
-              </p>
-            </div>
-            <Link
-              href="https://github.com/imai-studio/knot/blob/main/docs/agent-setup.md"
-              className={cn(
-                buttonVariants({ variant: "outline" }),
-                "h-10 px-4",
-              )}
-            >
-              Setup guide
-              <ArrowUpRight data-icon="inline-end" />
-            </Link>
-          </div>
-
-          <section
-            className="mt-8 grid gap-4 sm:grid-cols-3"
-            aria-label="Workspace metrics"
-          >
-            {metrics.map(({ icon: Icon, label, value, detail }) => (
-              <Card key={label}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div className="grid size-9 place-items-center rounded-lg bg-secondary">
-                      <Icon className="size-4" />
-                    </div>
-                    <span className="font-heading text-3xl font-semibold tracking-tight">
-                      {value}
-                    </span>
-                  </div>
-                  <CardTitle className="mt-3">{label}</CardTitle>
-                  <CardDescription>{detail}</CardDescription>
-                </CardHeader>
-              </Card>
-            ))}
-          </section>
-
-          <section className="mt-4 grid gap-4 lg:grid-cols-[1.25fr_0.75fr]">
-            <Card>
-              <CardHeader>
-                <CardTitle className="font-heading text-xl">
-                  Get connected
-                </CardTitle>
-                <CardDescription>
-                  Three deliberate steps from local runtime to usable workspace.
-                </CardDescription>
-                <CardAction>
-                  <Badge variant="secondary">1 of 3</Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent>
-                <ol className="space-y-1">
-                  <OnboardingStep
-                    icon={Code2}
-                    title="Install Knot locally"
-                    description="Run the CLI beside the agent you want to connect."
-                    status="current"
-                  />
-                  <OnboardingStep
-                    icon={Bot}
-                    title="Pair a connector"
-                    description="Authenticate the local runtime with this workspace."
-                  />
-                  <OnboardingStep
-                    icon={Globe2}
-                    title="Publish your first object"
-                    description="Choose what goes live and retain the ability to remove it."
-                  />
-                </ol>
-              </CardContent>
-            </Card>
-
-            <Card className="relative overflow-hidden bg-[#30283a] text-[#fffdfa]">
-              <Image
-                src="/art/knot-auth-bloom.png"
-                alt=""
-                width={280}
-                height={280}
-                className="pointer-events-none absolute -right-16 -bottom-20 size-64 opacity-16"
-              />
-              <CardHeader>
-                <CardTitle className="relative font-heading text-xl text-[#fffdfa]">
-                  Local-first by design
-                </CardTitle>
-                <CardDescription className="relative text-[#fffdfa]/60">
-                  Cloud coordination never becomes ambient machine access.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="relative space-y-4">
-                {[
-                  "Signed connector identity",
-                  "Explicit permission scopes",
-                  "Local policy enforcement",
-                ].map((item) => (
-                  <div key={item} className="flex items-center gap-3 text-sm">
-                    <span className="grid size-6 place-items-center rounded-full bg-primary text-primary-foreground">
-                      <Check className="size-3.5" />
-                    </span>
-                    {item}
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </section>
+          {view === "overview" ? (
+            <Overview />
+          ) : (
+            <SectionEmptyState view={view} />
+          )}
         </main>
       </div>
     </div>
   );
 }
 
-function OnboardingStep({
-  description,
-  icon: Icon,
-  status,
-  title,
-}: {
-  description: string;
-  icon: typeof Code2;
-  status?: "current";
-  title: string;
-}) {
+function Overview() {
   return (
-    <li className="flex gap-4 rounded-xl p-3">
-      <div
-        className={cn(
-          "grid size-10 shrink-0 place-items-center rounded-lg border",
-          status === "current"
-            ? "border-primary/20 bg-accent text-accent-foreground"
-            : "bg-muted text-muted-foreground",
-        )}
-      >
-        <Icon className="size-4" />
-      </div>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="flex items-center gap-2">
-          <p className="font-medium">{title}</p>
-          {status === "current" ? <Badge>Start here</Badge> : null}
-        </div>
-        <p className="mt-1 text-sm leading-5 text-muted-foreground">
-          {description}
+    <>
+      <div className="max-w-3xl">
+        <Badge variant="outline" className="mb-3 rounded-full">
+          P0 foundation
+        </Badge>
+        <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
+          Knot Cloud is online
+        </h1>
+        <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
+          This release establishes authenticated access, storage adapters, and
+          the signed protocol foundation. Connector pairing, publishing, and
+          API-key issuance are not released yet.
         </p>
       </div>
-      {status === "current" ? (
-        <Plus className="mt-2 size-4 text-primary" />
-      ) : (
-        <CircleDashed className="mt-2 size-4 text-muted-foreground" />
-      )}
-    </li>
+
+      <section className="mt-10 max-w-4xl border-t pt-8">
+        <h2 className="font-heading text-xl font-medium">Available now</h2>
+        <div className="mt-5 divide-y border-y">
+          {availableResources.map(({ detail, href, label, value }) => (
+            <Link
+              key={label}
+              href={href}
+              className="group grid gap-2 py-5 transition-colors hover:bg-muted/35 sm:grid-cols-[11rem_1fr_auto] sm:items-center sm:gap-6 sm:px-3"
+            >
+              <span className="font-medium">{label}</span>
+              <span className="text-sm leading-6 text-muted-foreground">
+                {detail}
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
+                {value}
+                <ArrowUpRight className="size-4" strokeWidth={1.75} />
+              </span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-10 max-w-4xl border-t pt-7">
+        <div className="flex items-start gap-3">
+          <ShieldCheck className="mt-0.5 size-5 shrink-0 text-primary" />
+          <div>
+            <h2 className="font-heading text-lg font-medium">
+              Local authority stays local
+            </h2>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+              The hosted foundation does not expose your Anytype, Heart, or
+              agent listener. Signed identity, explicit scopes, and local policy
+              remain the intended boundary for the next release.
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 text-sm sm:grid-cols-3">
+          {[
+            "Signed connector identity",
+            "Explicit permission scopes",
+            "Local policy enforcement",
+          ].map((item) => (
+            <div key={item} className="flex items-center gap-2.5">
+              <Check className="size-4 text-primary" strokeWidth={1.75} />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+const sectionCopy: Record<
+  Exclude<DashboardView, "overview">,
+  {
+    description: string;
+    detail: string;
+    icon: typeof Bot;
+    title: string;
+  }
+> = {
+  connectors: {
+    description:
+      "Pair and manage the local Knot runtimes trusted by this workspace.",
+    detail:
+      "Connector enrollment is not part of the current P0 release. Use the setup guide to prepare a local runtime; pairing will appear here when the signed enrollment route ships.",
+    icon: Bot,
+    title: "Connectors",
+  },
+  sites: {
+    description:
+      "Publish selected Anytype objects without exposing your local listener.",
+    detail:
+      "Public publishing routes are not part of the current P0 release. No content has been published from this workspace.",
+    icon: Globe2,
+    title: "Sites",
+  },
+  "api-keys": {
+    description: "Issue narrowly scoped credentials for the Knot data API.",
+    detail:
+      "API-key issuance is not part of the current P0 release. No credentials exist for this workspace.",
+    icon: KeyRound,
+    title: "API keys",
+  },
+  "audit-log": {
+    description: "Review security-sensitive actions across your workspace.",
+    detail:
+      "There are no released connector or publishing operations to display yet. Activity will appear here as those routes become available.",
+    icon: FileText,
+    title: "Audit log",
+  },
+};
+
+function SectionEmptyState({
+  view,
+}: {
+  view: Exclude<DashboardView, "overview">;
+}) {
+  const { description, detail, icon: Icon, title } = sectionCopy[view];
+
+  return (
+    <div className="max-w-3xl">
+      <Badge variant="outline" className="mb-3 rounded-full">
+        P0 foundation
+      </Badge>
+      <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
+        {title}
+      </h1>
+      <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
+        {description}
+      </p>
+
+      <section className="mt-10 border-t pt-10">
+        <div className="grid size-11 place-items-center rounded-xl bg-accent text-accent-foreground">
+          <Icon className="size-5" strokeWidth={1.75} />
+        </div>
+        <h2 className="mt-5 font-heading text-xl font-medium">
+          Nothing to configure yet
+        </h2>
+        <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+          {detail}
+        </p>
+        <Link
+          href="https://github.com/imai-studio/knot-cloud#p0-contents"
+          className={cn(
+            buttonVariants({ variant: "outline" }),
+            "mt-6 h-10 px-4 has-data-[icon=inline-end]:pr-4",
+          )}
+        >
+          View release status
+          <ArrowUpRight data-icon="inline-end" />
+        </Link>
+      </section>
+    </div>
   );
 }

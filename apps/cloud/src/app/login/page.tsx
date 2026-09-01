@@ -58,7 +58,7 @@ export default async function LoginPage({
             machine.
           </p>
         </div>
-        <div className="relative rounded-2xl border border-[#e3dae6] bg-[#fffdfa]/82 p-2 shadow-[var(--shadow-3)] backdrop-blur-sm">
+        <div className="relative rounded-2xl border border-[#e3dae6] bg-[#fffdfa]/82 p-2 backdrop-blur-sm">
           <div className="rounded-xl border border-[#e3dae6]/80 bg-[#fffdfa]/85 p-5">
             <p className="font-mono text-xs text-[#70677a]">policy.log</p>
             <div className="mt-4 space-y-3 text-sm">

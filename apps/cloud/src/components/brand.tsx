@@ -36,7 +36,7 @@ export function BrandMark({
   return (
     <span
       className={cn(
-        "relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-white shadow-sm ring-1 ring-black/8 dark:ring-white/10",
+        "relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-white shadow-none ring-1 ring-black/8 dark:ring-white/10",
         bare && "rounded-none bg-transparent shadow-none ring-0 dark:ring-0",
         className,
       )}

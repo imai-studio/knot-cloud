@@ -74,17 +74,21 @@ export default function Home() {
                 href="/login"
                 className={cn(
                   buttonVariants({ size: "lg" }),
-                  "h-12 rounded-full bg-foreground px-6 text-background shadow-sm transition-[transform,background-color] active:scale-[0.96] hover:bg-foreground/90",
+                  "h-11 gap-2 rounded-xl bg-foreground px-5 text-background shadow-none transition-[transform,background-color] has-data-[icon=inline-end]:pr-5 active:translate-y-0 active:scale-[0.96] hover:bg-foreground/90",
                 )}
               >
                 Open Knot
-                <ArrowRight data-icon="inline-end" />
+                <ArrowRight
+                  data-icon="inline-end"
+                  className="size-4 translate-x-px"
+                  strokeWidth={1.75}
+                />
               </Link>
               <a
                 href="https://github.com/imai-studio/knot"
                 className={cn(
                   buttonVariants({ variant: "outline", size: "lg" }),
-                  "h-12 rounded-full border-foreground/16 bg-background/70 px-6 transition-transform active:scale-[0.96]",
+                  "h-11 rounded-xl border-foreground/16 bg-background/70 px-5 shadow-none transition-transform active:translate-y-0 active:scale-[0.96]",
                 )}
               >
                 View the source
@@ -146,7 +150,7 @@ export default function Home() {
             sizes="100vw"
             className="pointer-events-none -z-10 object-cover object-left opacity-48 mix-blend-multiply"
           />
-          <div className="mx-auto max-w-3xl rounded-[2rem] bg-background/82 px-6 py-12 text-center shadow-[0_24px_70px_-48px_rgb(70_48_91/35%)] backdrop-blur-sm sm:px-12 sm:py-16">
+          <div className="mx-auto max-w-3xl rounded-[2rem] border border-foreground/10 bg-background/82 px-6 py-12 text-center backdrop-blur-sm sm:px-12 sm:py-16">
             <p className="font-display text-3xl leading-tight font-medium tracking-[-0.03em] text-balance sm:text-5xl">
               Built for agents that need boundaries.
             </p>
@@ -154,11 +158,15 @@ export default function Home() {
               href="/login"
               className={cn(
                 buttonVariants({ size: "lg" }),
-                "mt-8 h-12 rounded-full bg-foreground px-6 text-background transition-[transform,background-color] active:scale-[0.96] hover:bg-foreground/90",
+                "mt-8 h-11 gap-2 rounded-xl bg-foreground px-5 text-background shadow-none transition-[transform,background-color] has-data-[icon=inline-end]:pr-5 active:translate-y-0 active:scale-[0.96] hover:bg-foreground/90",
               )}
             >
               Open Knot
-              <ArrowRight data-icon="inline-end" />
+              <ArrowRight
+                data-icon="inline-end"
+                className="size-4 translate-x-px"
+                strokeWidth={1.75}
+              />
             </Link>
           </div>
         </section>
@@ -184,7 +192,7 @@ function ControlPlanePreview() {
         priority
       />
       <div className="relative z-10 flex min-h-[31rem] items-center justify-center px-1 py-14 sm:px-8 lg:justify-end lg:px-0">
-        <div className="w-full max-w-[34rem] rounded-[1.75rem] bg-card/88 p-5 shadow-[0_28px_80px_-38px_rgb(70_48_91/38%)] ring-1 ring-foreground/10 backdrop-blur-md sm:p-7">
+        <div className="w-full max-w-[34rem] rounded-[1.75rem] bg-card/88 p-5 ring-1 ring-foreground/10 backdrop-blur-md sm:p-7">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <span className="size-2 rounded-full bg-success" />

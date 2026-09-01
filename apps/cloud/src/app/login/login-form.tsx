@@ -62,7 +62,7 @@ export function LoginForm({ initialError }: { initialError?: string }) {
 
   if (submittedEmail) {
     return (
-      <Card className="w-full max-w-md shadow-xl shadow-foreground/5">
+      <Card className="w-full max-w-md shadow-none">
         <CardHeader className="pb-2">
           <div className="mb-4 grid size-11 place-items-center rounded-xl bg-accent text-accent-foreground">
             <CheckCircle2 className="size-5" />
@@ -104,7 +104,7 @@ export function LoginForm({ initialError }: { initialError?: string }) {
   }
 
   return (
-    <Card className="w-full max-w-md shadow-xl shadow-foreground/5">
+    <Card className="w-full max-w-md shadow-none">
       <CardHeader className="pb-2">
         <h1 className="font-heading text-2xl font-medium">Sign in to Knot</h1>
         <CardDescription className="leading-6">
