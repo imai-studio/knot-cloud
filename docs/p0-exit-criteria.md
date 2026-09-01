@@ -1,6 +1,6 @@
 # P0 exit criteria
 
-P0 freezes the compatibility and security boundaries before a public API exists.
+P0 defines compatibility and security boundaries before a public API exists.
 
 ## Contract
 
@@ -13,7 +13,7 @@ P0 freezes the compatibility and security boundaries before a public API exists.
 - [x] Connector-attested provenance is metadata rather than cloud authority.
 - [ ] Check released-client fixtures against the first server candidate.
 
-## Vercel and self-host spike
+## Deployment targets
 
 - [x] Next.js App Router Node-runtime skeleton.
 - [x] Standalone output configuration.

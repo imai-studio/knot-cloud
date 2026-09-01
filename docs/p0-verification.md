@@ -9,15 +9,15 @@ Verified locally on 2026-09-01 with Node.js 24 and pnpm 11.
 | Standalone Next.js runtime                       | Built `.next/standalone`, started the generated server, and probed `/api/health` and `/api/v1/meta`.                                                                                                                                           |
 | Response security headers                        | Live response included CSP, HSTS, `nosniff`, referrer, frame, opener, resource, and permissions policies.                                                                                                                                      |
 | Container                                        | Built `knot-cloud:p0`, ran it as the Dockerfile's non-root user, and received a healthy `/api/health` response.                                                                                                                                |
-| Independent review                               | Claude Code Opus High reviewed the initial P0 slice, the remediated candidate, and the final hardening delta. It confirmed the final reported Critical and High set closed with no regression in that scope. CodeRabbit was not used.          |
+| Independent review                               | Claude Code Opus High reviewed the initial P0 implementation and the fixes. The final review reported no remaining Critical or High issue in that scope. CodeRabbit was not used.                                                              |
 | Production Vercel build                          | Vercel built the monorepo with Node.js 24 in `iad1`; the production preflight authenticated as the restricted `knot_app` role and completed a private R2 write/read/delete round trip before compiling Next.js.                                |
 | Production endpoints                             | `https://knot.imai.tech/api/health` returned healthy and `https://knot.imai.tech/api/v1/meta` returned protocol metadata over the primary Cloudflare-managed domain. `https://knot.imai.studio` remains a trusted compatibility origin.        |
 
-The production foundation provisions Vercel, Neon, private Cloudflare R2, and Resend for
-invitation-only magic links. The application uses R2 through its S3-compatible API and does not use
-Vercel Blob. Upstash remains unprovisioned until a released signed mutation route needs replay
-protection. No owner or migrator credential is stored in the Vercel application environment.
+The production deployment uses Vercel, Neon, private Cloudflare R2, and Resend. The application
+uses R2 through its S3-compatible API and does not use Vercel Blob. Upstash remains unprovisioned
+until a released signed mutation route needs replay protection. The Vercel application environment
+does not contain an owner or migrator database credential.
 
-The deployment does not expose connector pairing, publication mutation, public reader, API-key
-management, or Anytype data routes. The separate registrable domain for public reader content is
-still undecided.
+This record does not verify connector pairing, publication mutation, a public reader, API-key
+management, or Anytype data routes. Those routes are not released. The public reader also needs a
+separate registrable domain, which has not been selected.

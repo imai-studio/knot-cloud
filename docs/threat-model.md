@@ -13,23 +13,28 @@ unreleased.
 
 ## Trust boundaries
 
-1. A human browser authenticates to the dashboard by invitation and email.
-2. A consumer application authenticates with a scoped API key.
-3. A local connector authenticates with an Ed25519 key generated and stored locally.
-4. Knot Cloud stores typed intents. Local Knot independently decides whether to execute one.
-5. Postgres is authoritative. Private object storage holds bytes. Redis and queues are accelerators
-   only.
+The deployed P0 boundary is a human browser authenticated to the dashboard by invitation and email.
+The application uses a restricted PostgreSQL role and private object-store credentials. Migration
+credentials never enter the application runtime.
 
-Credential classes are deliberately non-interchangeable. No endpoint may accept one class as a
-fallback for another.
+Later releases add these boundaries:
 
-## Principal threats and controls
+1. A consumer application authenticates with a scoped API key.
+2. A local connector authenticates with an Ed25519 key generated and stored locally.
+3. Knot Cloud stores typed intents. Local Knot independently decides whether to execute one.
+4. Postgres stores authoritative state. Private object storage holds bytes. Redis and queues may
+   start work or cache data, but cannot hold the only copy of authoritative state.
 
-| Threat                                              | Required control                                                                                      | P0 fixture or later gate                                            |
+Human sessions, connector keys, API keys, and first-party service credentials are not
+interchangeable. No endpoint may accept one credential class as a fallback for another.
+
+## Threats and controls
+
+| Threat                                              | Control or release requirement                                                                        | Evidence or later gate                                              |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Display-name or forwarded-message identity spoofing | Cloud identity claims grant no local authority; local connector re-fetches native objects             | Contract excludes participant authority; P2 adversarial integration |
+| Display-name or forwarded-message identity spoofing | Cloud identity claims grant no local authority; local connector fetches native objects again          | Contract excludes participant authority; P2 adversarial integration |
 | Cross-tenant access                                 | Composite tenant foreign keys, non-owner runtime role, transaction-scoped tenant GUC, and forced RLS  | Migration review and two-tenant P1 test                             |
-| Signed request replay                               | Short timestamp window, nonce claim, body digest, Postgres idempotency                                | Signature fixtures; Redis outage test before P1                     |
+| Signed request replay                               | Short timestamp window, nonce claim, body digest, Postgres idempotency                                | Signature fixtures; replay-store outage test before a signed route  |
 | Credential confusion                                | Separate human, connector, API, and service endpoint guards                                           | Contract principal enum and endpoint tests                          |
 | API becomes remote shell                            | Closed typed operation union; local operation allowlist                                               | Unknown `execute` payload rejection fixture                         |
 | Duplicate remote effects                            | Postgres idempotency, lease fencing, local command-ID dedupe                                          | Command contract fixture; P2 crash tests                            |
@@ -51,10 +56,10 @@ cannot recall copies that a reader already downloaded or stored outside Knot Clo
 must never promise otherwise.
 
 Knot Cloud will not serve untrusted reader content from `knot.imai.tech` or another control-plane
-registrable domain. The exact public-content domain is still undecided. Publishing remains blocked
+registrable domain. The public-content domain has not been selected. Publishing remains blocked
 until the operator records that choice and the renderer passes the P1 browser tests.
 
-## Explicit non-goals
+## Not in P0
 
 - The cloud does not prove a raw Anytype participant ID supplied by a client.
 - The cloud does not grant local filesystem, project, model, or agent permissions.
