@@ -174,6 +174,83 @@ describe("R2PrivateObjectStore", () => {
     expect(client.send).toHaveBeenCalledTimes(2);
   });
 
+  it.each([undefined, "", " 3", "+3", "03", "3.0", "3e0", "9007199254740992"])(
+    "rejects a 412 retry with non-canonical byte-size metadata: %s",
+    async (byteSize) => {
+      const bytes = new Uint8Array([1, 2, 3]);
+      const object = locator(bytes);
+      const client = mockClient(async (command) => {
+        if (command instanceof PutObjectCommand) {
+          throw Object.assign(new Error("already exists"), {
+            name: "PreconditionFailed",
+            $metadata: { httpStatusCode: 412 },
+          });
+        }
+        return {
+          ContentLength: bytes.byteLength,
+          ContentType: "application/octet-stream",
+          Metadata: {
+            ...(byteSize === undefined ? {} : { "byte-size": byteSize }),
+            kind: "asset",
+            sha256: object.sha256,
+            "tenant-id": object.tenantId,
+          },
+        };
+      });
+      const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+      await expect(
+        store.putImmutable({
+          locator: object,
+          body: bytes,
+          contentType: "application/octet-stream",
+        }),
+      ).rejects.toThrow(/valid byte-size/u);
+    },
+  );
+
+  it("propagates a missing object during 412 retry verification", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const missing = new S3ServiceException({
+      $fault: "client",
+      $metadata: { httpStatusCode: 404 },
+      name: "NotFound",
+    });
+    const client = mockClient(async (command) => {
+      if (command instanceof PutObjectCommand) {
+        throw Object.assign(new Error("already exists"), {
+          name: "PreconditionFailed",
+          $metadata: { httpStatusCode: 412 },
+        });
+      }
+      throw missing;
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: object,
+        body: bytes,
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toBe(missing);
+  });
+
+  it("rejects a canonical single-part ETag that does not match the bytes", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const client = mockClient(async () => ({ ETag: `\"${"0".repeat(32)}\"` }));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: bytes,
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toBeInstanceOf(ObjectDigestMismatchError);
+  });
+
   it("rejects a digest-key retry when stored metadata differs", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const object = locator(bytes);
@@ -275,6 +352,31 @@ describe("R2PrivateObjectStore", () => {
     );
   });
 
+  it("preserves the size error when over-length stream cancellation fails", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const cancelError = new Error("source refused cancellation");
+    const stream = new ReadableStream<Uint8Array>({
+      cancel: () => Promise.reject(cancelError),
+      start(controller) {
+        controller.enqueue(bytes);
+      },
+    });
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({})),
+      bucket: "knot-test",
+      maxObjectBytes: 8,
+    });
+
+    await expect(
+      store.putImmutable({
+        locator: locator(bytes),
+        body: stream,
+        contentLength: 3,
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toBeInstanceOf(ObjectSizeError);
+  });
+
   it("reads through the authenticated endpoint and verifies the bytes", async () => {
     const bytes = new Uint8Array([4, 5]);
     const object = locator(bytes);
@@ -316,6 +418,94 @@ describe("R2PrivateObjectStore", () => {
       Key: objectKeyFor(object),
     });
     expect((command as GetObjectCommand).input.Range).toBeUndefined();
+  });
+
+  it("falls back only when stored Content-Type is absent", async () => {
+    const bytes = new Uint8Array([4, 5]);
+    const object = locator(bytes);
+    const metadata = {
+      "byte-size": "2",
+      kind: "asset",
+      sha256: object.sha256,
+      "tenant-id": object.tenantId,
+    };
+    const missingTypeStore = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        Body: responseBody(bytes),
+        ContentLength: 2,
+        Metadata: metadata,
+      })),
+      bucket: "knot-test",
+    });
+    await expect(missingTypeStore.get(object)).resolves.toMatchObject({
+      descriptor: { contentType: "application/octet-stream" },
+    });
+
+    const invalidTypeStore = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        Body: responseBody(bytes),
+        ContentLength: 2,
+        ContentType: "invalid media type",
+        Metadata: metadata,
+      })),
+      bucket: "knot-test",
+    });
+    await expect(invalidTypeStore.get(object)).rejects.toThrow(/media type/u);
+  });
+
+  it("preserves invalid metadata errors when response cancellation fails", async () => {
+    const bytes = new Uint8Array([4, 5]);
+    const object = locator(bytes);
+    const cancel = vi.fn(() => Promise.reject(new Error("cancel failed")));
+    const source = new ReadableStream<Uint8Array>({ cancel });
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        Body: { transformToWebStream: () => source },
+        ContentLength: 2,
+        ContentType: "image/png",
+        Metadata: {
+          "byte-size": " 2",
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      })),
+      bucket: "knot-test",
+    });
+
+    await expect(store.get(object)).rejects.toThrow(/valid byte-size/u);
+    expect(cancel).toHaveBeenCalledWith("stored object metadata is invalid");
+  });
+
+  it("cancels an over-length stored response without replacing the size error", async () => {
+    const bytes = new Uint8Array([4, 5, 6]);
+    const object = locator(new Uint8Array([4, 5]));
+    const cancel = vi.fn(() => Promise.reject(new Error("cancel failed")));
+    const source = new ReadableStream<Uint8Array>({
+      cancel,
+      start(controller) {
+        controller.enqueue(bytes);
+      },
+    });
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        Body: { transformToWebStream: () => source },
+        ContentLength: 2,
+        ContentType: "image/png",
+        Metadata: {
+          "byte-size": "2",
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      })),
+      bucket: "knot-test",
+    });
+
+    await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
+    expect(cancel).toHaveBeenCalledWith(
+      "object exceeded its declared byte length",
+    );
   });
 
   it("fails a download whose bytes or metadata do not match the key", async () => {

@@ -101,6 +101,37 @@ describe("RevocableObjectReader", () => {
     );
   });
 
+  it("keeps a tombstoned read private when stream cancellation rejects", async () => {
+    const cancel = vi.fn(() => Promise.reject(new Error("cancel failed")));
+    const stored: StoredObject = {
+      descriptor: {
+        ...locator,
+        key: `tenants/${locator.tenantId}/assets/11/${locator.sha256}`,
+        contentType: "image/png",
+        size: 0,
+      },
+      cacheControl: privateObjectCacheControl,
+      stream: new ReadableStream<Uint8Array>({ cancel }),
+    };
+    const reader = new RevocableObjectReader(
+      objectStore(async () => stored),
+      {
+        getVisibility: vi
+          .fn<() => Promise<ObjectVisibility>>()
+          .mockResolvedValueOnce("active")
+          .mockResolvedValueOnce("tombstoned"),
+      },
+    );
+
+    await expect(reader.get(locator)).resolves.toEqual({
+      status: "not-found",
+      cacheControl: privateObjectCacheControl,
+    });
+    expect(cancel).toHaveBeenCalledWith(
+      "object was tombstoned during the read",
+    );
+  });
+
   it("cancels a fetched body when the second visibility check fails", async () => {
     const cancel = vi.fn();
     const stored: StoredObject = {

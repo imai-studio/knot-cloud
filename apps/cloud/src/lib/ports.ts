@@ -78,7 +78,9 @@ export class RevocableObjectReader {
       throw error;
     }
     if (visibility !== "active") {
-      await object.stream.cancel("object was tombstoned during the read");
+      await object.stream
+        .cancel("object was tombstoned during the read")
+        .catch(() => {});
       return {
         status: "not-found",
         cacheControl: privateObjectCacheControl,

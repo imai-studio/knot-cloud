@@ -126,7 +126,9 @@ async function materializeBody(input: {
       if (result.done) break;
       size += result.value.byteLength;
       if (size > contentLength || size > input.maxObjectBytes) {
-        await reader.cancel("object exceeded its declared byte length");
+        await reader
+          .cancel("object exceeded its declared byte length")
+          .catch(() => {});
         throw new ObjectSizeError(
           "stream contains more bytes than its declared length",
         );
@@ -168,11 +170,34 @@ function isPreconditionFailed(error: unknown): boolean {
 }
 
 function parseStoredSize(metadata: Record<string, string> | undefined): number {
-  const size = Number(metadata?.["byte-size"]);
-  if (!Number.isSafeInteger(size) || size < 0) {
+  const encodedSize = metadata?.["byte-size"];
+  if (!encodedSize || !/^(?:0|[1-9][0-9]*)$/u.test(encodedSize)) {
+    throw new Error("stored object is missing valid byte-size metadata");
+  }
+  const size = Number(encodedSize);
+  if (!Number.isSafeInteger(size)) {
     throw new Error("stored object is missing valid byte-size metadata");
   }
   return size;
+}
+
+function parseStoredContentType(contentType: string | undefined): string {
+  if (contentType === undefined) return "application/octet-stream";
+  validateContentType(contentType);
+  return contentType;
+}
+
+function verifySinglePartEtag(
+  etag: string | undefined,
+  bytes: Uint8Array,
+): void {
+  if (etag === undefined) return;
+  const normalized =
+    etag.startsWith('"') && etag.endsWith('"') ? etag.slice(1, -1) : etag;
+  if (!/^[a-f0-9]{32}$/iu.test(normalized)) return;
+  if (normalized.toLowerCase() !== digest(bytes, "md5").toString("hex")) {
+    throw new ObjectDigestMismatchError();
+  }
 }
 
 function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
@@ -242,7 +267,7 @@ export class R2PrivateObjectStore implements ObjectStore {
     }
 
     try {
-      await this.#client.send(
+      const result = await this.#client.send(
         new PutObjectCommand({
           Bucket: this.#bucket,
           Key: key,
@@ -260,12 +285,14 @@ export class R2PrivateObjectStore implements ObjectStore {
           IfNoneMatch: "*",
         }),
       );
+      verifySinglePartEtag(result.ETag, body);
     } catch (error) {
       if (!isPreconditionFailed(error)) throw error;
       const existing = await this.#client.send(
         new HeadObjectCommand({ Bucket: this.#bucket, Key: key }),
       );
       const storedSize = parseStoredSize(existing.Metadata);
+      verifySinglePartEtag(existing.ETag, body);
       if (
         existing.Metadata?.sha256 !== sha256 ||
         existing.Metadata?.["tenant-id"] !== input.locator.tenantId ||
@@ -305,8 +332,10 @@ export class R2PrivateObjectStore implements ObjectStore {
 
       const source = result.Body.transformToWebStream();
       let size: number;
+      let contentType: string;
       try {
         size = parseStoredSize(result.Metadata);
+        contentType = parseStoredContentType(result.ContentType);
         if (
           result.Metadata?.sha256 !== locator.sha256 ||
           result.Metadata?.["tenant-id"] !== locator.tenantId ||
@@ -341,7 +370,7 @@ export class R2PrivateObjectStore implements ObjectStore {
       const descriptor = {
         ...locator,
         key,
-        contentType: result.ContentType ?? "application/octet-stream",
+        contentType,
         size,
       };
       return {

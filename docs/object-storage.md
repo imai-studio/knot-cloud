@@ -49,13 +49,20 @@ tenants/<tenant-uuid>/assets/<first-two-digest-characters>/<sha256>
 
 The adapter rejects malformed tenant IDs and digests. It computes SHA-256 over the upload and
 compares it with the locator before writing. It also sends `Content-MD5` so R2 can detect transport
-corruption. `If-None-Match: *` prevents an existing immutable object from being overwritten.
+corruption. For single-part responses that expose a canonical MD5 ETag, Knot compares that ETag as
+an additional integrity check; SHA-256 remains the object identity and final authority.
+`If-None-Match: *` prevents an existing immutable object from being overwritten. A `412` retry is
+accepted only after `HEAD` confirms the exact tenant, digest, kind, byte size, media type, and any
+canonical single-part ETag returned by R2.
 
 ## Read limits and cache policy
 
 Reads use the authenticated S3 endpoint. The adapter checks the response length and the recorded
 tenant, asset marker, digest, and byte size. It buffers no more than the configured limit, verifies
 the exact byte count and SHA-256 digest, and only then returns a stream to the caller.
+The stored byte-size value must use canonical unsigned decimal syntax; whitespace, signs, decimal
+points, exponent notation, and unsafe integers are rejected. Missing media type metadata falls
+back to `application/octet-stream`, while malformed media types fail closed.
 
 Every stored object and returned object descriptor uses:
 
