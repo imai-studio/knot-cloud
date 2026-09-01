@@ -61,6 +61,15 @@ a policy that permits token lookup before a tenant is known. It cannot read tena
 approve a connector, create schema objects, bypass row-level security, or inherit another role. The
 migration revokes the temporary schema-create grant before it returns.
 
+Migration `0008a_security_definer_acl.sql` repairs every public-schema `SECURITY DEFINER` function
+ACL after ownership has moved to `knot_resolver`, `knot_bootstrap`, or `knot_pairing`. Verify that
+`PUBLIC` cannot execute any of them and `knot_app` can. Neon may retain platform-granted memberships
+from the database owner to those three roles; the database owner cannot revoke a row granted by
+`cloud_admin`. Such rows are inert only when both `inherit_option` and `set_option` are false. The
+repair removes membership rows it granted itself and does not treat provider-owned rows as
+application authorization. Remove the local owner credential after the final migration and retain
+it only in the operator's secret store for future migrations.
+
 `knot_app` creates and lists pairing requests inside an active tenant context. It calls separate
 approval, denial, rename, and revoke functions. Those functions check that the actor is still an
 owner or admin inside the same transaction. Removing a member keeps historical pairing rows and

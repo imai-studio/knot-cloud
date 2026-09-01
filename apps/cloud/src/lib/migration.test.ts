@@ -32,17 +32,17 @@ describe("migration inventory", () => {
     const migrationFiles = (await readdir(migrationDirectory))
       .filter((name) => /^\d+.*\.sql$/u.test(name))
       .sort();
-    expect(migrationFiles.every((name) => /^\d{4}_.+\.sql$/u.test(name))).toBe(
-      true,
-    );
+    expect(
+      migrationFiles.every((name) => /^\d{4}[a-z]?_.+\.sql$/u.test(name)),
+    ).toBe(true);
     expect(migrationFiles.filter((name) => name.startsWith("0001_"))).toEqual([
       "0001_active_asset_uniqueness.sql",
       "0001_command_ledger.sql",
     ]);
-    const laterPrefixes = migrationFiles
+    const laterOrderingKeys = migrationFiles
       .filter((name) => Number(name.slice(0, 4)) >= 2)
-      .map((name) => name.slice(0, 4));
-    expect(new Set(laterPrefixes).size).toBe(laterPrefixes.length);
+      .map((name) => name.slice(0, name.indexOf("_")));
+    expect(new Set(laterOrderingKeys).size).toBe(laterOrderingKeys.length);
   });
 });
 
@@ -1746,6 +1746,166 @@ describe("P0 database isolation", () => {
     expect(privileges.rows).toEqual([
       { reads_members: false, executes_approval: false, executes_poll: true },
     ]);
+
+    const pollAcl = await database.query<{
+      app_executes: boolean;
+      public_executes: boolean;
+    }>(`
+      SELECT
+        has_function_privilege(
+          'knot_app', 'poll_pairing_session(uuid,text,timestamptz)', 'EXECUTE'
+        ) AS app_executes,
+        EXISTS (
+          SELECT 1
+          FROM pg_proc AS function
+          CROSS JOIN LATERAL aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE function.oid = 'poll_pairing_session(uuid,text,timestamptz)'::regprocedure
+            AND privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes
+    `);
+    expect(pollAcl.rows).toEqual([
+      { app_executes: true, public_executes: false },
+    ]);
+  });
+
+  it("repairs SECURITY DEFINER ACLs from an applied 0008 state", async () => {
+    await database.exec(`
+      GRANT knot_resolver TO CURRENT_USER;
+      SET ROLE knot_resolver;
+      GRANT EXECUTE ON FUNCTION public.resolve_connector(uuid) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.resolve_api_key(text) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.resolve_invitation(text) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION public.complete_command(
+        uuid, uuid, uuid, integer, timestamptz, text, public.command_state,
+        jsonb, text, boolean, integer
+      ) TO PUBLIC;
+      REVOKE ALL ON FUNCTION public.resolve_connector(uuid) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.resolve_api_key(text) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.resolve_invitation(text) FROM knot_app;
+      REVOKE ALL ON FUNCTION public.complete_command(
+        uuid, uuid, uuid, integer, timestamptz, text, public.command_state,
+        jsonb, text, boolean, integer
+      ) FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_resolver FROM CURRENT_USER GRANTED BY CURRENT_USER;
+
+      GRANT knot_bootstrap TO CURRENT_USER;
+      SET ROLE knot_bootstrap;
+      GRANT EXECUTE ON FUNCTION public.resolve_or_bootstrap_workspace(
+        text, text, text, smallint, text
+      ) TO PUBLIC;
+      GRANT EXECUTE ON FUNCTION
+        public.select_workspace_for_session(text, text, uuid)
+      TO PUBLIC;
+      REVOKE ALL ON FUNCTION public.resolve_or_bootstrap_workspace(
+        text, text, text, smallint, text
+      ) FROM knot_app;
+      REVOKE ALL ON FUNCTION
+        public.select_workspace_for_session(text, text, uuid)
+      FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_bootstrap FROM CURRENT_USER GRANTED BY CURRENT_USER;
+
+      GRANT knot_pairing TO CURRENT_USER;
+      SET ROLE knot_pairing;
+      GRANT EXECUTE ON FUNCTION
+        public.poll_pairing_session(uuid, text, timestamptz)
+      TO PUBLIC;
+      REVOKE ALL ON FUNCTION
+        public.poll_pairing_session(uuid, text, timestamptz)
+      FROM knot_app;
+      RESET ROLE;
+      REVOKE knot_pairing FROM CURRENT_USER;
+    `);
+
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const repair = await readFile(
+      path.join(migrationDirectory, "0008a_security_definer_acl.sql"),
+      "utf8",
+    );
+    await database.exec(repair);
+    await database.exec(repair);
+
+    const repaired = await database.query<{
+      app_executes: boolean;
+      public_executes: boolean;
+      self_granted_memberships: number;
+    }>(`
+      SELECT
+        has_function_privilege(
+          'knot_app', 'poll_pairing_session(uuid,text,timestamptz)', 'EXECUTE'
+        ) AS app_executes,
+        EXISTS (
+          SELECT 1
+          FROM pg_proc AS function
+          CROSS JOIN LATERAL aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE function.oid = 'poll_pairing_session(uuid,text,timestamptz)'::regprocedure
+            AND privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes,
+        (
+          SELECT count(*)::int
+          FROM pg_auth_members AS membership
+          WHERE membership.roleid = 'knot_pairing'::regrole
+            AND membership.member = current_user::regrole
+            AND membership.grantor = current_user::regrole
+        ) AS self_granted_memberships
+    `);
+    expect(repaired.rows).toEqual([
+      {
+        app_executes: true,
+        public_executes: false,
+        self_granted_memberships: 0,
+      },
+    ]);
+
+    const exposedDefiners = await database.query<{
+      signature: string;
+      owner: string;
+      public_executes: boolean;
+      app_executes: boolean;
+    }>(`
+      SELECT
+        function.oid::regprocedure::text AS signature,
+        owner.rolname AS owner,
+        EXISTS (
+          SELECT 1
+          FROM aclexplode(
+            coalesce(function.proacl, acldefault('f', function.proowner))
+          ) AS privilege
+          WHERE privilege.grantee = 0
+            AND privilege.privilege_type = 'EXECUTE'
+        ) AS public_executes,
+        has_function_privilege('knot_app', function.oid, 'EXECUTE') AS app_executes
+      FROM pg_proc AS function
+      JOIN pg_namespace AS namespace ON namespace.oid = function.pronamespace
+      JOIN pg_roles AS owner ON owner.oid = function.proowner
+      WHERE namespace.nspname = 'public'
+        AND function.prosecdef
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM aclexplode(
+              coalesce(function.proacl, acldefault('f', function.proowner))
+            ) AS privilege
+            WHERE privilege.grantee = 0
+              AND privilege.privilege_type = 'EXECUTE'
+          )
+          OR NOT has_function_privilege('knot_app', function.oid, 'EXECUTE')
+        )
+      ORDER BY signature
+    `);
+    expect(exposedDefiners.rows).toEqual([]);
   });
 });
 
