@@ -15,8 +15,11 @@ https://<content-origin>/media/<site-slug>/<publication-id>/<sha256>
 The page route renders only the versioned document schema. It does not accept HTML, scripts,
 styles, embeds, or arbitrary URLs. Media is read from the private object store only after the
 database confirms that the digest belongs to the current active version. Pages and media are
-checked again before the response starts. Disabled and unpublished content returns `404` with
-`Cache-Control: no-store`.
+checked again before the response starts. Pages use `Cache-Control: no-store`. Digest-addressed
+media uses `Cache-Control: public, max-age=0, must-revalidate` plus a digest ETag: browsers may keep
+the immutable bytes but must revalidate visibility before every reuse. A matching conditional
+request returns `304` only after the active-version lookup succeeds, so disable and unpublish take
+effect immediately without downloading and hashing the R2 object again.
 
 ## Vercel
 
@@ -42,7 +45,8 @@ curl -i https://<content-origin>/p/example/page
 
 The first two requests must return `404`. The third must return either the active page or `404`; it
 must never redirect to sign-in or set a cookie. Inspect the page and media responses for the CSP,
-`nosniff`, same-origin resource policy, no-referrer policy, and `no-store` cache policy.
+`nosniff`, same-origin resource policy, no-referrer policy, page `no-store`, and media
+`must-revalidate` cache policy.
 
 ## Self-hosting
 

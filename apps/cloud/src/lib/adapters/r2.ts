@@ -22,8 +22,9 @@ import {
 } from "@/lib/ports";
 
 const deleteBatchSize = 1_000;
-const defaultMaxObjectBytes = 33_554_432;
-const hardMaxObjectBytes = 134_217_728;
+const maximumAssetBytes = 104_857_600;
+const defaultMaxObjectBytes = maximumAssetBytes;
+const hardMaxObjectBytes = maximumAssetBytes;
 const tenantIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -217,11 +218,54 @@ function verifySinglePartEtag(
   }
 }
 
-function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
+function boundedStoredStream(
+  source: ReadableStream<Uint8Array>,
+  expectedSize: number,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let observedSize = 0;
   return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          if (observedSize !== expectedSize) {
+            controller.error(
+              new ObjectSizeError(
+                "stored object length does not match its verified metadata",
+              ),
+            );
+          } else {
+            controller.close();
+          }
+          reader.releaseLock();
+          return;
+        }
+        observedSize += chunk.value.byteLength;
+        if (observedSize > expectedSize) {
+          await reader
+            .cancel("stored object exceeds its verified length")
+            .catch(() => {});
+          controller.error(
+            new ObjectSizeError(
+              "stored object length does not match its verified metadata",
+            ),
+          );
+          reader.releaseLock();
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        reader.releaseLock();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
     },
   });
 }
@@ -477,15 +521,6 @@ export class R2PrivateObjectStore implements ObjectStore {
         throw error;
       }
 
-      const body = await materializeBody({
-        body: source,
-        contentLength: metadata.size,
-        maxObjectBytes: this.maxObjectBytes,
-      });
-      if (digest(body, "sha256").toString("hex") !== locator.sha256) {
-        throw new ObjectDigestMismatchError();
-      }
-
       const descriptor = {
         ...locator,
         key,
@@ -495,7 +530,10 @@ export class R2PrivateObjectStore implements ObjectStore {
       return {
         descriptor,
         cacheControl: privateObjectCacheControl,
-        stream: streamFromBytes(body),
+        // Direct uploads are fully hashed by verify() before they become
+        // publishable. Reads validate immutable key metadata and stream the
+        // object instead of buffering and hashing it again on every request.
+        stream: boundedStoredStream(source, metadata.size),
       };
     } catch (error) {
       if (isMissingObject(error)) return undefined;

@@ -219,6 +219,33 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=0, must-revalidate",
+    );
+    expect(response.headers.get("ETag")).toBe(`"sha256-${digest}"`);
+  });
+
+  it("revalidates active membership before returning a cached-media 304", async () => {
+    const deps = dependencies();
+    const response = await createPublicReaderHandlers({
+      ...deps,
+      environment,
+    }).media(
+      new Request(
+        `https://pages.example.org/media/demo/${publicationId}/${digest}`,
+        { headers: { "If-None-Match": `"sha256-${digest}"` } },
+      ),
+      "demo",
+      publicationId,
+      digest,
+    );
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get("Cache-Control")).toBe(
+      "public, max-age=0, must-revalidate",
+    );
+    expect(deps.repository.resolveAsset).toHaveBeenCalledOnce();
+    expect(deps.objects.get).not.toHaveBeenCalled();
   });
 });
 

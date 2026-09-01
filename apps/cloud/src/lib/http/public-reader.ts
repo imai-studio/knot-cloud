@@ -108,6 +108,13 @@ export function createPublicReaderHandlers(dependencies: {
           sha256,
         });
         if (!first) return notFound();
+        const entityTag = `"sha256-${first.sha256}"`;
+        if (request.headers.get("If-None-Match") === entityTag) {
+          return new Response(null, {
+            status: 304,
+            headers: readerHeaders({ entityTag, media: true }),
+          });
+        }
         const object = await dependencies.objects.get({
           tenantId: first.tenantId,
           sha256: first.sha256,
@@ -142,6 +149,8 @@ export function createPublicReaderHandlers(dependencies: {
             contentType: first.contentType,
             contentLength: first.byteSize,
             disposition: `${inline ? "inline" : "attachment"}; filename="${sha256}"`,
+            entityTag,
+            media: true,
           }),
         });
       } catch {
@@ -181,9 +190,13 @@ function readerHeaders(input?: {
   contentType?: string;
   contentLength?: number;
   disposition?: string;
+  entityTag?: string;
+  media?: boolean;
 }): Headers {
   const headers = new Headers({
-    "Cache-Control": "no-store, max-age=0",
+    "Cache-Control": input?.media
+      ? "public, max-age=0, must-revalidate"
+      : "no-store, max-age=0",
     "Content-Security-Policy": publicReaderCsp,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -200,6 +213,7 @@ function readerHeaders(input?: {
   if (input?.disposition) {
     headers.set("Content-Disposition", input.disposition);
   }
+  if (input?.entityTag) headers.set("ETag", input.entityTag);
   return headers;
 }
 

@@ -44,7 +44,7 @@ CREATE TABLE asset_uploads (
   sha256 text NOT NULL CHECK (sha256 ~ '^[a-f0-9]{64}$'),
   pathname text NOT NULL,
   content_type text NOT NULL,
-  byte_size bigint NOT NULL CHECK (byte_size BETWEEN 1 AND 134217728),
+  byte_size bigint NOT NULL CHECK (byte_size BETWEEN 1 AND 104857600),
   file_name text NOT NULL CHECK (char_length(file_name) BETWEEN 1 AND 500),
   idempotency_key text NOT NULL CHECK (
     char_length(idempotency_key) BETWEEN 16 AND 200
@@ -149,7 +149,7 @@ BEGIN
       'tenants/%s/assets/%s/%s', requested_tenant_id,
       left(requested_sha256, 2), requested_sha256
     )
-    OR requested_byte_size NOT BETWEEN 1 AND 134217728
+    OR requested_byte_size NOT BETWEEN 1 AND 104857600
     OR requested_expires_at <= now()
     OR requested_expires_at > now() + interval '15 minutes'
   THEN

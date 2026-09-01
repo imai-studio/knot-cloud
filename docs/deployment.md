@@ -58,6 +58,13 @@ The smoke test rejects an elevated database runtime role. It also writes, verifi
 private tenant-scoped R2 object. Run it against the exact Neon, R2, and replay-store credentials
 configured for the candidate before promotion.
 
+For publication candidates, also exercise the real presigned-upload path against the candidate R2
+bucket: request a one-byte `application/octet-stream` asset upload from an authorized connector,
+perform the returned `PUT` with every returned required header, commit the upload, and verify that
+the API reports `verified`. Delete the test publication afterward and drain maintenance. This
+proves that R2 preserved the signed `sha256`, `tenant-id`, `kind`, and `byte-size` metadata; a local
+URL-shape test is not sufficient. Record the request ID and outcome, never the URL or credentials.
+
 ## Deploy
 
 Build and deploy the monorepo from its root. The Vercel project should use Node.js 24 and keep the

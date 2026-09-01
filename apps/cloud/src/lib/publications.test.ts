@@ -104,6 +104,73 @@ describe("PublicationService", () => {
     ).rejects.toThrow("publication-digest-mismatch");
     expect(repository.preparePublicationVersion).not.toHaveBeenCalled();
   });
+
+  it("validates and signs an asset before writing durable upload state", async () => {
+    const calls: string[] = [];
+    const expiresAt = new Date(Date.now() + 600_000);
+    const repository = publicationRepository({
+      prepareAssetUpload: vi.fn(async (input) => {
+        calls.push("prepare");
+        return {
+          uploadId: input.uploadId,
+          assetId: input.assetId,
+          expiresAt: input.expiresAt,
+          duplicate: false,
+        };
+      }),
+    });
+    const objects = objectStore({
+      createPresignedAssetUpload: vi.fn(async () => {
+        calls.push("sign");
+        return {
+          uploadUrl: "https://r2.example.test/upload",
+          requiredHeaders: { "content-length": "3" },
+          expiresAt,
+        };
+      }),
+    });
+
+    await expect(
+      new PublicationService(repository, objects).requestAssetUpload({
+        tenantId,
+        connectorId,
+        siteId,
+        sha256: "a".repeat(64),
+        byteSize: 3,
+        contentType: "image/png",
+        fileName: "asset.png",
+        idempotencyKey: "asset-upload-key-0001",
+      }),
+    ).resolves.toMatchObject({
+      uploadUrl: "https://r2.example.test/upload",
+      requiredHeaders: { "content-length": "3" },
+    });
+    expect(calls).toEqual(["sign", "prepare"]);
+  });
+
+  it("does not burn idempotency state when the object provider rejects an upload", async () => {
+    const repository = publicationRepository();
+    const providerError = new Error(
+      "asset exceeds the configured upload limit",
+    );
+    const objects = objectStore({
+      createPresignedAssetUpload: vi.fn().mockRejectedValue(providerError),
+    });
+
+    await expect(
+      new PublicationService(repository, objects).requestAssetUpload({
+        tenantId,
+        connectorId,
+        siteId,
+        sha256: "a".repeat(64),
+        byteSize: 3,
+        contentType: "image/png",
+        fileName: "asset.png",
+        idempotencyKey: "asset-upload-key-0001",
+      }),
+    ).rejects.toBe(providerError);
+    expect(repository.prepareAssetUpload).not.toHaveBeenCalled();
+  });
 });
 
 describe("PublicationDeletionWorker", () => {

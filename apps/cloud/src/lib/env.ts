@@ -38,8 +38,8 @@ const r2EnvironmentSchema = z.object({
     .number()
     .int()
     .positive()
-    .max(134_217_728)
-    .default(33_554_432),
+    .max(104_857_600)
+    .default(104_857_600),
 });
 
 const upstashEnvironmentSchema = z.object({

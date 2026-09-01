@@ -160,24 +160,26 @@ export class PublicationService {
   }) {
     const locator = { tenantId: input.tenantId, sha256: input.sha256 };
     const requestedExpiresAt = new Date(Date.now() + 600_000);
-    const prepared = await this.repository.prepareAssetUpload({
-      ...input,
-      assetId: randomUUID(),
-      uploadId: randomUUID(),
-      pathname: assetPath(locator),
-      expiresAt: requestedExpiresAt,
-    });
+    const uploadId = randomUUID();
+    const assetId = randomUUID();
+    // Validate the object-store contract and mint the URL before durable
+    // idempotency state is written. A provider or size failure must not burn
+    // the caller's key.
     const signed = await this.objects.createPresignedAssetUpload({
       locator,
       contentLength: input.byteSize,
       contentType: input.contentType,
-      expiresInSeconds: Math.max(
-        30,
-        Math.min(
-          600,
-          Math.floor((prepared.expiresAt.getTime() - Date.now()) / 1_000),
-        ),
-      ),
+      expiresInSeconds: 600,
+    });
+    const prepared = await this.repository.prepareAssetUpload({
+      ...input,
+      assetId,
+      uploadId,
+      pathname: assetPath(locator),
+      expiresAt:
+        requestedExpiresAt < signed.expiresAt
+          ? requestedExpiresAt
+          : signed.expiresAt,
     });
     return {
       ...prepared,

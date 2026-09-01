@@ -438,6 +438,8 @@ AS $$
     AND publication.disabled_at IS NULL
     AND publication.unpublished_at IS NULL
     AND version.state = 'ready'
+  ORDER BY publication.updated_at DESC, publication.id, version.id
+  LIMIT 1
 $$;
 
 CREATE FUNCTION resolve_public_reader_asset(
@@ -480,6 +482,8 @@ AS $$
     AND version.state = 'ready'
     AND asset.verified_at IS NOT NULL
     AND asset.deleted_at IS NULL
+  ORDER BY publication.updated_at DESC, publication.id, version.id, asset.id
+  LIMIT 1
 $$;
 
 REVOKE ALL ON FUNCTION authorize_publication_write(uuid, uuid, uuid, text) FROM PUBLIC;

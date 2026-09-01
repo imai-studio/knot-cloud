@@ -135,7 +135,9 @@ describe("R2 environment", () => {
   };
 
   it("uses a bounded default object size", () => {
-    expect(parseR2Environment(requiredR2).R2_MAX_OBJECT_BYTES).toBe(33_554_432);
+    expect(parseR2Environment(requiredR2).R2_MAX_OBJECT_BYTES).toBe(
+      104_857_600,
+    );
   });
 
   it("accepts an explicit limit and rejects unsafe values", () => {
@@ -151,7 +153,7 @@ describe("R2 environment", () => {
     expect(() =>
       parseR2Environment({
         ...requiredR2,
-        R2_MAX_OBJECT_BYTES: "134217729",
+        R2_MAX_OBJECT_BYTES: "104857601",
       }),
     ).toThrow();
   });

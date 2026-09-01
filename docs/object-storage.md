@@ -14,14 +14,14 @@ give it access to this bucket only.
 
 Set these server-side variables:
 
-| Variable               | Purpose                                                |
-| ---------------------- | ------------------------------------------------------ |
-| `OBJECT_STORE_DRIVER`  | Must be `r2`. This is also the default.                |
-| `R2_ACCOUNT_ID`        | Cloudflare account that owns the bucket.               |
-| `R2_BUCKET_NAME`       | Private bucket name.                                   |
-| `R2_ACCESS_KEY_ID`     | Access key for the bucket-scoped R2 token.             |
-| `R2_SECRET_ACCESS_KEY` | Secret for the same token.                             |
-| `R2_MAX_OBJECT_BYTES`  | Upload and download cap. Defaults to 33,554,432 bytes. |
+| Variable               | Purpose                                                                   |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `OBJECT_STORE_DRIVER`  | Must be `r2`. This is also the default.                                   |
+| `R2_ACCOUNT_ID`        | Cloudflare account that owns the bucket.                                  |
+| `R2_BUCKET_NAME`       | Private bucket name.                                                      |
+| `R2_ACCESS_KEY_ID`     | Access key for the bucket-scoped R2 token.                                |
+| `R2_SECRET_ACCESS_KEY` | Secret for the same token.                                                |
+| `R2_MAX_OBJECT_BYTES`  | Upload and download cap. Defaults to and cannot exceed 104,857,600 bytes. |
 
 The cap cannot exceed 134,217,728 bytes in this implementation. Knot buffers one verified object per
 request, and total memory use grows with concurrent requests. Choose the cap against the runtime's
@@ -58,8 +58,9 @@ canonical single-part ETag returned by R2.
 ## Read limits and cache policy
 
 Reads use the authenticated S3 endpoint. The adapter checks the response length and the recorded
-tenant, asset marker, digest, and byte size. It buffers no more than the configured limit, verifies
-the exact byte count and SHA-256 digest, and only then returns a stream to the caller.
+tenant, asset marker, digest, and byte size, then returns a byte-count-bounded stream. Direct
+uploads are fully streamed and SHA-256 verified at commit time before they can be linked to a live
+publication; immutable digest keys and R2 metadata carry that verified identity on later reads.
 The stored byte-size value must use canonical unsigned decimal syntax; whitespace, signs, decimal
 points, exponent notation, and unsafe integers are rejected. Missing media type metadata falls
 back to `application/octet-stream`, while malformed media types fail closed.
@@ -70,8 +71,9 @@ Every stored object and private object descriptor uses:
 Cache-Control: private, no-store, max-age=0
 ```
 
-This policy keeps private reads out of browser and shared caches. The public reader applies its own
-`no-store` response after checking active publication state before and after the private read.
+This policy keeps private reads out of browser and shared caches. The public reader applies
+`must-revalidate` with a digest ETag after checking active publication state before and after the
+private read. Conditional requests avoid a second R2 transfer while still rechecking revocation.
 
 ## Tombstones and deletion
 

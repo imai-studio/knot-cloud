@@ -779,6 +779,16 @@ describe("publication lifecycle migration", () => {
     ).toEqual([]);
   });
 
+  it("rejects the same public site slug across tenants", async () => {
+    await database.exec("RESET ROLE");
+    await expect(
+      database.query(
+        "INSERT INTO sites (tenant_id, name, slug) VALUES ($1, 'Collision', 'site-a')",
+        [tenantB],
+      ),
+    ).rejects.toThrow();
+  });
+
   async function verifyAsset() {
     const pathname = assetPath(tenantA, assetDigest);
     await database.query(
