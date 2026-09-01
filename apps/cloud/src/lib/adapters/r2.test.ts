@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -121,6 +122,72 @@ describe("R2PrivateObjectStore", () => {
         "tenant-id": tenantA,
       },
     });
+  });
+
+  it("treats an exact existing digest-key object as an idempotent retry", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = mockClient(async (command) => {
+      if (command instanceof PutObjectCommand) {
+        throw Object.assign(new Error("already exists"), {
+          name: "PreconditionFailed",
+          $metadata: { httpStatusCode: 412 },
+        });
+      }
+      expect(command).toBeInstanceOf(HeadObjectCommand);
+      return {
+        ContentLength: bytes.byteLength,
+        ContentType: "application/octet-stream",
+        Metadata: {
+          "byte-size": String(bytes.byteLength),
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      };
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: object,
+        body: bytes,
+        contentType: "application/octet-stream",
+      }),
+    ).resolves.toMatchObject({ key: objectKeyFor(object), size: 3 });
+    expect(client.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a digest-key retry when stored metadata differs", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = mockClient(async (command) => {
+      if (command instanceof PutObjectCommand) {
+        throw Object.assign(new Error("already exists"), {
+          name: "PreconditionFailed",
+          $metadata: { httpStatusCode: 412 },
+        });
+      }
+      return {
+        ContentLength: bytes.byteLength,
+        ContentType: "text/plain",
+        Metadata: {
+          "byte-size": String(bytes.byteLength),
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      };
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(
+      store.putImmutable({
+        locator: object,
+        body: bytes,
+        contentType: "application/octet-stream",
+      }),
+    ).rejects.toThrow(/does not match/u);
   });
 
   it("bounds streaming uploads and checks their exact byte length", async () => {
@@ -254,6 +321,24 @@ describe("R2PrivateObjectStore", () => {
       bucket: "knot-test",
       maxObjectBytes: 3,
     });
+
+    await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
+  });
+
+  it("rejects a stored object whose response length differs from metadata", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = mockClient(async () => ({
+      Body: responseBody(bytes),
+      ContentLength: 2,
+      Metadata: {
+        "byte-size": "3",
+        kind: "asset",
+        sha256: object.sha256,
+        "tenant-id": object.tenantId,
+      },
+    }));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
 
     await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
   });

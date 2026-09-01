@@ -49,7 +49,8 @@ pnpm --filter @imai/knot-cloud smoke:providers
 ```
 
 The smoke test rejects an elevated database runtime role. It also writes, verifies, and removes one
-private tenant-scoped R2 object.
+private tenant-scoped R2 object. Run it against the exact Neon, R2, and replay-store credentials
+configured for the candidate before promotion.
 
 ## Deploy
 

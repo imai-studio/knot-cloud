@@ -26,6 +26,12 @@ Set these server-side variables:
 The cap cannot exceed 134,217,728 bytes in this implementation. Knot verifies an upload before it
 sends bytes to R2, so the cap also limits per-request memory use.
 
+Vercel Functions are not the asset transport. Their request body is limited to roughly 4.5 MiB,
+well below the R2 object limit. Publication clients must upload large bytes with a short-lived,
+single-object presigned R2 request. The control plane then reads the private object, calculates its
+SHA-256 digest, checks its exact length, and only then marks the asset verified. Do not add a
+Function route that buffers an upload before passing it to R2.
+
 Use [`apps/cloud/.env.example`](../apps/cloud/.env.example) for local development. Vercel and
 self-hosted deployments should inject the same values through their secret managers.
 
@@ -101,3 +107,6 @@ credentials loaded in the current shell:
 ```bash
 pnpm --filter @imai/knot-cloud smoke:providers
 ```
+
+Run this check against the exact candidate environment before promotion. It verifies credentials
+and private bucket access. It does not replace publication commit or destructive-unpublish tests.

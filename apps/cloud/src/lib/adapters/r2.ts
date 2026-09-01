@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
   S3ServiceException,
@@ -159,6 +160,16 @@ function isMissingObject(error: unknown): boolean {
   );
 }
 
+function isPreconditionFailed(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (Reflect.get(error, "name") === "PreconditionFailed" ||
+      Reflect.get(Reflect.get(error, "$metadata") ?? {}, "httpStatusCode") ===
+        412)
+  );
+}
+
 function parseStoredSize(metadata: Record<string, string> | undefined): number {
   const size = Number(metadata?.["byte-size"]);
   if (!Number.isSafeInteger(size) || size < 0) {
@@ -233,24 +244,44 @@ export class R2PrivateObjectStore implements ObjectStore {
       throw new ObjectDigestMismatchError();
     }
 
-    await this.#client.send(
-      new PutObjectCommand({
-        Bucket: this.#bucket,
-        Key: key,
-        Body: body,
-        ContentLength: body.byteLength,
-        ContentMD5: digest(body, "md5").toString("base64"),
-        ContentType: input.contentType,
-        CacheControl: privateObjectCacheControl,
-        Metadata: {
-          "byte-size": String(body.byteLength),
-          kind: "asset",
-          sha256,
-          "tenant-id": input.locator.tenantId,
-        },
-        IfNoneMatch: "*",
-      }),
-    );
+    try {
+      await this.#client.send(
+        new PutObjectCommand({
+          Bucket: this.#bucket,
+          Key: key,
+          Body: body,
+          ContentLength: body.byteLength,
+          ContentMD5: digest(body, "md5").toString("base64"),
+          ContentType: input.contentType,
+          CacheControl: privateObjectCacheControl,
+          Metadata: {
+            "byte-size": String(body.byteLength),
+            kind: "asset",
+            sha256,
+            "tenant-id": input.locator.tenantId,
+          },
+          IfNoneMatch: "*",
+        }),
+      );
+    } catch (error) {
+      if (!isPreconditionFailed(error)) throw error;
+      const existing = await this.#client.send(
+        new HeadObjectCommand({ Bucket: this.#bucket, Key: key }),
+      );
+      const storedSize = parseStoredSize(existing.Metadata);
+      if (
+        existing.Metadata?.sha256 !== sha256 ||
+        existing.Metadata?.["tenant-id"] !== input.locator.tenantId ||
+        existing.Metadata?.kind !== "asset" ||
+        existing.ContentLength !== storedSize ||
+        storedSize !== body.byteLength ||
+        existing.ContentType !== input.contentType
+      ) {
+        throw new Error(
+          "existing immutable object does not match the requested write",
+        );
+      }
+    }
 
     return {
       ...input.locator,
@@ -272,20 +303,27 @@ export class R2PrivateObjectStore implements ObjectStore {
       if (!result.Body) return undefined;
 
       const source = result.Body.transformToWebStream();
-      const size = parseStoredSize(result.Metadata);
-      if (
-        result.Metadata?.sha256 !== locator.sha256 ||
-        result.Metadata?.["tenant-id"] !== locator.tenantId ||
-        result.Metadata?.kind !== "asset"
-      ) {
-        await source.cancel("stored object metadata does not match its key");
-        throw new Error("stored object metadata does not match its key");
-      }
-      if (size > this.maxObjectBytes || (result.ContentLength ?? 0) > size) {
-        await source.cancel("stored object exceeds the configured read limit");
-        throw new ObjectSizeError(
-          "stored object exceeds the configured read limit",
-        );
+      let size: number;
+      try {
+        size = parseStoredSize(result.Metadata);
+        if (
+          result.Metadata?.sha256 !== locator.sha256 ||
+          result.Metadata?.["tenant-id"] !== locator.tenantId ||
+          result.Metadata?.kind !== "asset"
+        ) {
+          throw new Error("stored object metadata does not match its key");
+        }
+        if (
+          size > this.maxObjectBytes ||
+          (result.ContentLength !== undefined && result.ContentLength !== size)
+        ) {
+          throw new ObjectSizeError(
+            "stored object length does not match its verified metadata",
+          );
+        }
+      } catch (error) {
+        await source.cancel("stored object metadata is invalid");
+        throw error;
       }
 
       const body = await materializeBody({
