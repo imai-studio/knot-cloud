@@ -40,6 +40,11 @@ the command-ledger migration and Upstash configuration are applied in production
 smoke check passes, and a deployed signed-request canary succeeds. Repository presence alone does
 not make a route released.
 
+The candidate protocol `1.0` command wire format is still pre-release. During review it was
+narrowed so command identifiers and connector route identifiers are UUIDs rather than opaque
+strings. No released-client compatibility promise was changed. Once the command routes enter this
+release record, later incompatible wire changes require an explicit protocol-version transition.
+
 ### Release blocker
 
 - Public reader content needs a separate registrable domain. The domain has not been chosen, so no

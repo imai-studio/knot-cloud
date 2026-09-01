@@ -13,7 +13,7 @@ import {
 } from "./connector-commands";
 import { ConnectorAuthenticationError } from "../security/connector-auth";
 
-const connectorId = "00000000-0000-4000-8000-000000000011";
+const connectorId = "abcdefab-cdef-4abc-8def-abcdefabcdef";
 const tenantId = "00000000-0000-4000-8000-000000000001";
 const commandId = "00000000-0000-4000-8000-000000000051";
 
@@ -40,6 +40,7 @@ function handlers(commandLedger: CommandLedger) {
     connectors: { findActiveConnector: () => Promise.resolve(undefined) },
     nonces: { claim: () => Promise.resolve("claimed") },
     allowedAuthorities: ["knot.test"],
+    problemBaseUrl: "https://trusted.knot.test",
     authenticate: () =>
       Promise.resolve({
         connectorId,
@@ -159,13 +160,14 @@ describe("connector command HTTP service", () => {
 
   it("rejects a signed connector that does not match the route", async () => {
     const claim = vi.fn<CommandLedger["claim"]>();
+    const otherConnectorId = "00000000-0000-4000-8000-000000000012";
     const response = await handlers(commands({ claim })).claim(
-      request("/api/v1/connectors/another/commands/claim", {
+      request(`/api/v1/connectors/${otherConnectorId}/commands/claim`, {
         protocolVersion: "1.0",
         maximumCommands: 1,
         leaseSeconds: 60,
       }),
-      "another",
+      otherConnectorId,
     );
 
     expect(response.status).toBe(403);
@@ -175,12 +177,31 @@ describe("connector command HTTP service", () => {
     expect(claim).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes an uppercase UUID connector path before fencing", async () => {
+    const claim = vi.fn<CommandLedger["claim"]>().mockResolvedValue(undefined);
+    const uppercaseConnectorId = connectorId.toUpperCase();
+    const response = await handlers(commands({ claim })).claim(
+      request(`/api/v1/connectors/${uppercaseConnectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      uppercaseConnectorId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(claim).toHaveBeenCalledWith(
+      expect.objectContaining({ connectorId }),
+    );
+  });
+
   it("returns server time when connector authentication rejects clock skew", async () => {
     const service = createConnectorCommandHandlers({
       commands: commands(),
       connectors: { findActiveConnector: () => Promise.resolve(undefined) },
       nonces: { claim: () => Promise.resolve("claimed") },
       allowedAuthorities: ["knot.test"],
+      problemBaseUrl: "https://trusted.knot.test",
       authenticate: () =>
         Promise.reject(new ConnectorAuthenticationError("clock-skew", 401)),
       now: () => new Date("2026-09-01T00:00:00Z"),
@@ -196,6 +217,7 @@ describe("connector command HTTP service", () => {
 
     expect(response.status).toBe(401);
     expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      type: "https://trusted.knot.test/problems/clock-skew",
       code: "clock-skew",
       retryable: false,
       serverUnixSeconds: 1_788_220_800,
@@ -208,6 +230,7 @@ describe("connector command HTTP service", () => {
       connectors: { findActiveConnector: () => Promise.resolve(undefined) },
       nonces: { claim: () => Promise.resolve("claimed") },
       allowedAuthorities: ["knot.test"],
+      problemBaseUrl: "https://trusted.knot.test",
       authenticate: () =>
         Promise.reject(new ConnectorAuthenticationError("rate-limited", 429)),
     });
@@ -307,6 +330,7 @@ describe("connector command HTTP service", () => {
       connectors: { findActiveConnector: () => Promise.resolve(undefined) },
       nonces: { claim: () => Promise.resolve("claimed") },
       allowedAuthorities: ["knot.test"],
+      problemBaseUrl: "https://trusted.knot.test",
       authenticate: () => {
         authenticated = true;
         return Promise.resolve({ connectorId, tenantId, scopes: [] });
@@ -331,6 +355,42 @@ describe("connector command HTTP service", () => {
     expect(problemDetailsSchema.parse(await response.json()).code).toBe(
       "payload-too-large",
     );
+    expect(authenticated).toBe(false);
+  });
+
+  it("rejects a malformed Content-Length as an invalid request", async () => {
+    let authenticated = false;
+    const service = createConnectorCommandHandlers({
+      commands: commands(),
+      connectors: { findActiveConnector: () => Promise.resolve(undefined) },
+      nonces: { claim: () => Promise.resolve("claimed") },
+      allowedAuthorities: ["knot.test"],
+      problemBaseUrl: "https://trusted.knot.test",
+      authenticate: () => {
+        authenticated = true;
+        return Promise.resolve({ connectorId, tenantId, scopes: [] });
+      },
+    });
+    const response = await service.claim(
+      new Request(
+        `https://attacker.invalid/api/v1/connectors/${connectorId}/commands/claim`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": "not-a-number",
+          },
+          body: "{}",
+        },
+      ),
+      connectorId,
+    );
+
+    expect(response.status).toBe(400);
+    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+      type: "https://trusted.knot.test/problems/invalid-request",
+      code: "invalid-request",
+    });
     expect(authenticated).toBe(false);
   });
 
@@ -404,11 +464,44 @@ describe("connector command HTTP service", () => {
     });
   });
 
+  it("logs an internal command failure with the response request id", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const claim = vi
+      .fn<CommandLedger["claim"]>()
+      .mockRejectedValue(new Error("sensitive database diagnostic"));
+    const response = await handlers(commands({ claim })).claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+    const problem = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(500);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toEqual({
+      level: "error",
+      event: "connector-command-internal-error",
+      requestId: problem.requestId,
+      status: 500,
+      code: "internal-error",
+    });
+    expect(error.mock.calls[0]?.[0]).not.toContain(
+      "sensitive database diagnostic",
+    );
+    error.mockRestore();
+  });
+
   it("returns a typed retryable problem when production providers cannot initialize", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const factory = vi.fn(() => {
       throw new Error("missing Upstash configuration");
     });
-    const dispatch = createProductionConnectorCommandDispatcher(factory);
+    const dispatch = createProductionConnectorCommandDispatcher(
+      factory,
+      () => "https://trusted.knot.test",
+    );
     const connectorRequest = request(
       `/api/v1/connectors/${connectorId}/commands/claim`,
       { protocolVersion: "1.0", maximumCommands: 1, leaseSeconds: 60 },
@@ -430,13 +523,23 @@ describe("connector command HTTP service", () => {
       "application/problem+json",
     );
     expect(first.headers.get("Retry-After")).toBe("30");
-    expect(problemDetailsSchema.parse(await first.json())).toMatchObject({
+    const firstProblem = problemDetailsSchema.parse(await first.json());
+    expect(firstProblem).toMatchObject({
+      type: "https://trusted.knot.test/problems/dependency-unavailable",
       code: "dependency-unavailable",
       retryable: true,
       retryAfterSeconds: 30,
     });
     expect(second.status).toBe(503);
     expect(factory).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(error.mock.calls[0]?.[0]))).toMatchObject({
+      event: "connector-provider-unavailable",
+      requestId: firstProblem.requestId,
+      status: 503,
+      code: "dependency-unavailable",
+    });
+    error.mockRestore();
   });
 
   it("memoizes a successfully constructed production handler", async () => {

@@ -66,11 +66,14 @@ describe("connector authentication", () => {
   it("authenticates before atomically claiming a nonce", async () => {
     const { connector, headers } = await signedFixture();
     const claimed = new Set<string>();
+    const expirations: number[] = [];
     const nonces: ReplayNonceStore = {
-      claim: ({ nonce }) =>
+      claim: ({ nonce, expiresAt }) => (
+        expirations.push(expiresAt),
         Promise.resolve(
           claimed.has(nonce) ? "replayed" : (claimed.add(nonce), "claimed"),
-        ),
+        )
+      ),
     };
     const connectors = {
       findActiveConnector: () => Promise.resolve(connector),
@@ -106,6 +109,7 @@ describe("connector authentication", () => {
         nowUnixSeconds: now,
       }),
     ).rejects.toMatchObject({ code: "replay-detected", status: 409 });
+    expect(expirations).toEqual([now + 600, now + 600]);
   });
 
   it("rejects body tampering before consuming the nonce", async () => {

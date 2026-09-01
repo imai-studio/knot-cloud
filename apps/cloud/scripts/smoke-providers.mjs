@@ -75,6 +75,29 @@ if (
   throw new Error("DATABASE_URL is not using the restricted knot_app role");
 }
 
+const commandProcedures = await database`
+  SELECT
+    to_regprocedure(
+      'claim_command(uuid,uuid,scope_name[],timestamp with time zone,text,integer)'
+    ) IS NOT NULL AS claim_command,
+    to_regprocedure(
+      'extend_command_lease(uuid,uuid,uuid,integer,timestamp with time zone,text,integer)'
+    ) IS NOT NULL AS extend_command_lease,
+    to_regprocedure(
+      'complete_command(uuid,uuid,uuid,integer,timestamp with time zone,text,command_state,jsonb,text,boolean,integer)'
+    ) IS NOT NULL AS complete_command
+`;
+const commandProcedure = commandProcedures[0];
+if (
+  !commandProcedure?.claim_command ||
+  !commandProcedure.extend_command_lease ||
+  !commandProcedure.complete_command
+) {
+  throw new Error(
+    "The exact command-ledger procedure signatures from migration 0007 are required",
+  );
+}
+
 const redis = new Redis({
   url: redisUrl,
   token: redisToken,
@@ -156,7 +179,9 @@ try {
   }
 }
 
-console.log("Neon role, Upstash, and R2 object round-trip verified.");
+console.log(
+  "Neon role and command procedures, Upstash, and R2 object round-trip verified.",
+);
 
 function hasEnvironmentValue(name) {
   return (

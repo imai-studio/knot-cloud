@@ -8,12 +8,16 @@ import {
   commandResultSubmissionSchema,
   protocolVersion,
 } from "@imai/knot-cloud-contract";
-import { ZodError, type ZodType } from "zod";
+import { z, ZodError, type ZodType } from "zod";
 
 import { NeonCommandLedger } from "@/lib/adapters/neon-command-ledger";
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
 import { createReplayNonceStore } from "@/lib/adapters/factory";
-import { getSigningAuthorities } from "@/lib/env";
+import {
+  getAppBaseUrl,
+  getCloudEnvironment,
+  getSigningAuthorities,
+} from "@/lib/env";
 import type {
   CommandLedger,
   ConnectorRateLimitStore,
@@ -42,6 +46,7 @@ export interface ConnectorCommandDependencies {
   nonces: ReplayNonceStore;
   rateLimits?: ConnectorRateLimitStore;
   allowedAuthorities: readonly string[];
+  problemBaseUrl: string;
   authenticate?: typeof authenticateConnectorRequest;
   now?: () => Date;
 }
@@ -53,11 +58,14 @@ async function readBoundedBody(
   const contentLength = request.headers.get("Content-Length");
   if (contentLength !== null) {
     const parsedLength = Number(contentLength);
-    if (
-      !Number.isSafeInteger(parsedLength) ||
-      parsedLength < 0 ||
-      parsedLength > maximumBodyBytes
-    ) {
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0) {
+      throw new HttpProblem(
+        400,
+        "invalid-request",
+        "Content-Length is not a valid non-negative integer",
+      );
+    }
+    if (parsedLength > maximumBodyBytes) {
       throw new HttpProblem(
         413,
         "payload-too-large",
@@ -149,7 +157,11 @@ export function createConnectorCommandHandlers(
       rateLimits: dependencies.rateLimits,
       allowedAuthorities: dependencies.allowedAuthorities,
     });
-    if (connector.connectorId !== pathConnectorId) {
+    const canonicalPathConnectorId = z
+      .uuid()
+      .parse(pathConnectorId)
+      .toLowerCase();
+    if (connector.connectorId !== canonicalPathConnectorId) {
       throw new HttpProblem(
         403,
         "forbidden",
@@ -180,7 +192,7 @@ export function createConnectorCommandHandlers(
             ? "authentication-required"
             : error.code;
         return problemResponse({
-          request,
+          problemBaseUrl: dependencies.problemBaseUrl,
           status: error.status,
           code,
           title: "Connector authentication failed",
@@ -194,7 +206,7 @@ export function createConnectorCommandHandlers(
       }
       if (error instanceof HttpProblem) {
         return problemResponse({
-          request,
+          problemBaseUrl: dependencies.problemBaseUrl,
           status: error.status,
           code: error.code,
           title: error.message,
@@ -204,7 +216,7 @@ export function createConnectorCommandHandlers(
       }
       if (error instanceof ZodError) {
         return problemResponse({
-          request,
+          problemBaseUrl: dependencies.problemBaseUrl,
           status: 400,
           code: "invalid-request",
           title: "Request body does not match the protocol",
@@ -217,19 +229,20 @@ export function createConnectorCommandHandlers(
         error.code === "22023"
       ) {
         return problemResponse({
-          request,
+          problemBaseUrl: dependencies.problemBaseUrl,
           status: 422,
           code: "invalid-request",
           title: "The command result is not valid for the leased operation",
         });
       }
       return problemResponse({
-        request,
+        problemBaseUrl: dependencies.problemBaseUrl,
         status: 500,
         code: "internal-error",
         title: "The command service could not complete the request",
         retryable: true,
         retryAfterSeconds: 5,
+        logEvent: "connector-command-internal-error",
       });
     }
   }
@@ -376,6 +389,7 @@ export function createProductionConnectorCommandHandlers() {
     nonces: connectorSecurity,
     rateLimits: connectorSecurity,
     allowedAuthorities: getSigningAuthorities(),
+    problemBaseUrl: getCloudEnvironment().APP_BASE_URL,
   });
 }
 
@@ -392,6 +406,7 @@ type ConnectorCommandHandlers = ReturnType<
  */
 export function createProductionConnectorCommandDispatcher(
   factory: () => ConnectorCommandHandlers = createProductionConnectorCommandHandlers,
+  problemBaseUrl: () => string = getAppBaseUrl,
 ) {
   let handlers: ConnectorCommandHandlers | undefined;
   let constructionFailed = false;
@@ -410,12 +425,13 @@ export function createProductionConnectorCommandDispatcher(
     }
     if (!handlers) {
       return problemResponse({
-        request,
+        problemBaseUrl: problemBaseUrl(),
         status: 503,
         code: "dependency-unavailable",
         title: "The connector command service is temporarily unavailable",
         retryable: true,
         retryAfterSeconds: 30,
+        logEvent: "connector-provider-unavailable",
       });
     }
 

@@ -160,7 +160,7 @@ export async function authenticateConnectorRequest(input: {
   const nonceResult = await input.nonces.claim({
     connectorId,
     nonce,
-    expiresAt: timestamp + maximumClockSkewSeconds + 1,
+    expiresAt: now + maximumClockSkewSeconds * 2,
   });
   if (nonceResult === "replayed") {
     throw new ConnectorAuthenticationError("replay-detected", 409);

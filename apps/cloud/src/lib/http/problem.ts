@@ -19,7 +19,7 @@ export class HttpProblem extends Error {
 }
 
 export function problemResponse(input: {
-  request: Request;
+  problemBaseUrl: string;
   status: ProblemDetails["status"];
   code: ProblemDetails["code"];
   title: string;
@@ -27,18 +27,32 @@ export function problemResponse(input: {
   retryable?: boolean;
   retryAfterSeconds?: number;
   serverUnixSeconds?: number;
+  logEvent?:
+    "connector-command-internal-error" | "connector-provider-unavailable";
 }): Response {
+  const requestId = randomBytes(16).toString("base64url");
   const body = problemDetailsSchema.parse({
-    type: new URL(`/problems/${input.code}`, input.request.url).toString(),
+    type: new URL(`/problems/${input.code}`, input.problemBaseUrl).toString(),
     title: input.title,
     status: input.status,
     code: input.code,
     detail: input.detail,
-    requestId: randomBytes(16).toString("base64url"),
+    requestId,
     retryable: input.retryable ?? false,
     retryAfterSeconds: input.retryAfterSeconds,
     serverUnixSeconds: input.serverUnixSeconds,
   });
+  if (input.logEvent) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: input.logEvent,
+        requestId,
+        status: input.status,
+        code: input.code,
+      }),
+    );
+  }
   const headers: Record<string, string> = {
     "Cache-Control": "no-store",
     "Content-Type": "application/problem+json",

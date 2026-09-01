@@ -22,6 +22,8 @@ const coreEnvironmentSchema = z.object({
   KNOT_SIGNING_AUTHORITIES: optionalNonEmptyString(),
 });
 
+const appBaseUrlSchema = z.url();
+
 const r2EnvironmentSchema = z.object({
   R2_ACCOUNT_ID: z.string().min(1),
   R2_BUCKET_NAME: z
@@ -87,6 +89,15 @@ export function parseCloudEnvironment(
   input: Record<string, string | undefined>,
 ): CloudEnvironment {
   return coreEnvironmentSchema.parse(input);
+}
+
+/**
+ * Read the public application origin without requiring unrelated providers.
+ * Error responses use this trusted deployment setting instead of the request
+ * Host header, which is controlled by the caller at the HTTP boundary.
+ */
+export function getAppBaseUrl(): string {
+  return appBaseUrlSchema.parse(process.env.APP_BASE_URL);
 }
 
 export const requiredEnvironmentKeys = [
