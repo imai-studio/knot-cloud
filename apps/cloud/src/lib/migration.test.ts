@@ -89,7 +89,7 @@ describe("P0 database isolation", () => {
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
         ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
-        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'), '{}');
+        ('${connectorSameTenant}', '${tenantA}', 'A2', '1.0', decode(repeat('02', 32), 'hex'), '{}');
       INSERT INTO api_keys (
         id, tenant_id, name, key_id, key_digest, scopes
       ) VALUES
