@@ -99,6 +99,15 @@ export const commandResultSchema = z.discriminatedUnion("outcome", [
       outcome: z.literal("failed"),
       retryable: z.boolean(),
       errorCode: z.string().min(1).max(200),
+      retryAfterSeconds: z.number().int().min(1).max(86_400).optional(),
+    })
+    .superRefine((value, context) => {
+      if (value.retryAfterSeconds !== undefined && !value.retryable) {
+        context.addIssue({
+          code: "custom",
+          message: "retryAfterSeconds requires retryable to be true",
+        });
+      }
     })
     .strict(),
 ]);

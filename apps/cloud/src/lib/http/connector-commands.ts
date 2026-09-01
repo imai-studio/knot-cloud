@@ -14,7 +14,11 @@ import { NeonCommandLedger } from "@/lib/adapters/neon-command-ledger";
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
 import { UpstashReplayNonceStore } from "@/lib/adapters/upstash-replay";
 import { getSigningAuthorities } from "@/lib/env";
-import type { CommandLedger, ReplayNonceStore } from "@/lib/ports";
+import type {
+  CommandLedger,
+  ConnectorRateLimitStore,
+  ReplayNonceStore,
+} from "@/lib/ports";
 import {
   authenticateConnectorRequest,
   ConnectorAuthenticationError,
@@ -23,7 +27,8 @@ import {
 
 import { HttpProblem, jsonResponse, problemResponse } from "./problem";
 
-const maximumBodyBytes = 64 * 1024;
+const maximumControlBodyBytes = 64 * 1024;
+const maximumResultBodyBytes = 1024 * 1024;
 
 type AuthenticatedConnector = {
   connectorId: string;
@@ -35,12 +40,16 @@ export interface ConnectorCommandDependencies {
   commands: CommandLedger;
   connectors: ConnectorRepository;
   nonces: ReplayNonceStore;
+  rateLimits?: ConnectorRateLimitStore;
   allowedAuthorities: readonly string[];
   authenticate?: typeof authenticateConnectorRequest;
   now?: () => Date;
 }
 
-async function readBoundedBody(request: Request): Promise<Uint8Array> {
+async function readBoundedBody(
+  request: Request,
+  maximumBodyBytes: number,
+): Promise<Uint8Array> {
   const contentLength = request.headers.get("Content-Length");
   if (contentLength !== null) {
     const parsedLength = Number(contentLength);
@@ -137,6 +146,7 @@ export function createConnectorCommandHandlers(
       body,
       connectors: dependencies.connectors,
       nonces: dependencies.nonces,
+      rateLimits: dependencies.rateLimits,
       allowedAuthorities: dependencies.allowedAuthorities,
     });
     if (connector.connectorId !== pathConnectorId) {
@@ -152,13 +162,14 @@ export function createConnectorCommandHandlers(
   async function execute(
     request: Request,
     pathConnectorId: string,
+    maximumBodyBytes: number,
     operation: (
       body: Uint8Array,
       connector: AuthenticatedConnector,
     ) => Promise<Response>,
   ): Promise<Response> {
     try {
-      const body = await readBoundedBody(request);
+      const body = await readBoundedBody(request, maximumBodyBytes);
       const connector = await authorize(request, pathConnectorId, body);
       return await operation(body, connector);
     } catch (error) {
@@ -173,7 +184,8 @@ export function createConnectorCommandHandlers(
           status: error.status,
           code,
           title: "Connector authentication failed",
-          retryable: false,
+          retryable: error.code === "rate-limited",
+          retryAfterSeconds: error.code === "rate-limited" ? 60 : undefined,
           serverUnixSeconds:
             error.code === "clock-skew"
               ? Math.floor(now().getTime() / 1_000)
@@ -211,111 +223,145 @@ export function createConnectorCommandHandlers(
 
   return {
     claim(request: Request, connectorId: string): Promise<Response> {
-      return execute(request, connectorId, async (body, connector) => {
-        const input = parseJson(body, commandClaimRequestSchema);
-        const commands = [];
-        for (let index = 0; index < input.maximumCommands; index += 1) {
+      return execute(
+        request,
+        connectorId,
+        maximumControlBodyBytes,
+        async (body, connector) => {
+          const input = parseJson(body, commandClaimRequestSchema);
+          const commands = [];
           const command = await dependencies.commands.claim({
             tenantId: connector.tenantId,
             connectorId: connector.connectorId,
             allowedScopes: connector.scopes,
             leaseSeconds: input.leaseSeconds,
           });
-          if (!command) break;
-          commands.push(
-            commandEnvelopeSchema.parse({
+          if (command) {
+            try {
+              commands.push(
+                commandEnvelopeSchema.parse({
+                  protocolVersion,
+                  commandId: command.commandId,
+                  connectorId: connector.connectorId,
+                  requiredScope: command.requiredScope,
+                  createdBy: command.createdByKind,
+                  createdAt: unixSeconds(command.createdAt),
+                  notBefore: unixSeconds(command.notBefore),
+                  expiresAt: unixSeconds(command.expiresAt),
+                  attempt: command.attempt,
+                  leaseToken: command.leaseToken,
+                  leaseExpiresAt: unixSeconds(command.leaseExpiresAt),
+                  payload: command.payload,
+                }),
+              );
+            } catch (error) {
+              if (!(error instanceof ZodError)) throw error;
+              await dependencies.commands.complete({
+                tenantId: connector.tenantId,
+                connectorId: connector.connectorId,
+                commandId: command.commandId,
+                attempt: command.attempt,
+                leaseToken: command.leaseToken,
+                completion: {
+                  outcome: "failed",
+                  retryable: false,
+                  errorCode: "invalid-command-envelope",
+                },
+              });
+            }
+          }
+          return jsonResponse(
+            commandClaimResponseSchema.parse({
               protocolVersion,
-              commandId: command.commandId,
-              connectorId: connector.connectorId,
-              requiredScope: command.requiredScope,
-              createdBy: command.createdByKind,
-              createdAt: unixSeconds(command.createdAt),
-              notBefore: unixSeconds(command.notBefore),
-              expiresAt: unixSeconds(command.expiresAt),
-              attempt: command.attempt,
-              leaseToken: command.leaseToken,
-              leaseExpiresAt: unixSeconds(command.leaseExpiresAt),
-              payload: command.payload,
+              commands,
+              pollAfterSeconds: commands.length === 0 ? 5 : 1,
             }),
           );
-        }
-        return jsonResponse(
-          commandClaimResponseSchema.parse({
-            protocolVersion,
-            commands,
-            pollAfterSeconds: commands.length === 0 ? 5 : 1,
-          }),
-        );
-      });
+        },
+      );
     },
 
     extend(request: Request, connectorId: string): Promise<Response> {
-      return execute(request, connectorId, async (body, connector) => {
-        const input = parseJson(body, commandLeaseExtensionSchema);
-        const leaseExpiresAt = await dependencies.commands.extend({
-          tenantId: connector.tenantId,
-          commandId: input.commandId,
-          attempt: input.attempt,
-          leaseToken: input.leaseToken,
-          leaseSeconds: input.extendBySeconds,
-        });
-        if (!leaseExpiresAt) {
-          throw new HttpProblem(
-            409,
-            "lease-lost",
-            "The command lease is no longer active",
-          );
-        }
-        return jsonResponse(
-          commandLeaseExtendedSchema.parse({
-            protocolVersion,
+      return execute(
+        request,
+        connectorId,
+        maximumControlBodyBytes,
+        async (body, connector) => {
+          const input = parseJson(body, commandLeaseExtensionSchema);
+          const leaseExpiresAt = await dependencies.commands.extend({
+            tenantId: connector.tenantId,
+            connectorId: connector.connectorId,
             commandId: input.commandId,
             attempt: input.attempt,
-            leaseExpiresAt: unixSeconds(leaseExpiresAt),
-          }),
-        );
-      });
+            leaseToken: input.leaseToken,
+            leaseSeconds: input.extendBySeconds,
+          });
+          if (!leaseExpiresAt) {
+            throw new HttpProblem(
+              409,
+              "lease-lost",
+              "The command lease is no longer active",
+            );
+          }
+          return jsonResponse(
+            commandLeaseExtendedSchema.parse({
+              protocolVersion,
+              commandId: input.commandId,
+              attempt: input.attempt,
+              leaseExpiresAt: unixSeconds(leaseExpiresAt),
+            }),
+          );
+        },
+      );
     },
 
     complete(request: Request, connectorId: string): Promise<Response> {
-      return execute(request, connectorId, async (body, connector) => {
-        const input = parseJson(body, commandResultSubmissionSchema);
-        const completion = await dependencies.commands.complete({
-          tenantId: connector.tenantId,
-          commandId: input.commandId,
-          attempt: input.attempt,
-          leaseToken: input.leaseToken,
-          completion: input.result,
-        });
-        if (
-          completion.status === "stale" ||
-          completion.status === "unknown-lease"
-        ) {
-          throw new HttpProblem(
-            409,
-            "lease-lost",
-            "The command lease is no longer active",
-          );
-        }
-        return jsonResponse(
-          commandResultReceiptSchema.parse({
-            protocolVersion,
+      return execute(
+        request,
+        connectorId,
+        maximumResultBodyBytes,
+        async (body, connector) => {
+          const input = parseJson(body, commandResultSubmissionSchema);
+          const completion = await dependencies.commands.complete({
+            tenantId: connector.tenantId,
+            connectorId: connector.connectorId,
             commandId: input.commandId,
             attempt: input.attempt,
-            status: completion.status,
-            state: completion.state,
-          }),
-        );
-      });
+            leaseToken: input.leaseToken,
+            completion: input.result,
+          });
+          if (
+            completion.status === "stale" ||
+            completion.status === "unknown-lease"
+          ) {
+            throw new HttpProblem(
+              409,
+              "lease-lost",
+              "The command lease is no longer active",
+            );
+          }
+          return jsonResponse(
+            commandResultReceiptSchema.parse({
+              protocolVersion,
+              commandId: input.commandId,
+              attempt: input.attempt,
+              status: completion.status,
+              state: completion.state,
+            }),
+          );
+        },
+      );
     },
   };
 }
 
 export function createProductionConnectorCommandHandlers() {
+  const connectorSecurity = new UpstashReplayNonceStore();
   return createConnectorCommandHandlers({
     commands: new NeonCommandLedger(),
     connectors: new NeonConnectorRepository(),
-    nonces: new UpstashReplayNonceStore(),
+    nonces: connectorSecurity,
+    rateLimits: connectorSecurity,
     allowedAuthorities: getSigningAuthorities(),
   });
 }

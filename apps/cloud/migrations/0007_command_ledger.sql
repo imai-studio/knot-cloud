@@ -11,6 +11,38 @@ ALTER TABLE commands
   ADD CONSTRAINT commands_error_code_size
   CHECK (error_code IS NULL OR char_length(error_code) BETWEEN 1 AND 200);
 
+ALTER TABLE commands
+  ADD CONSTRAINT commands_required_scope_matches_payload
+  CHECK (
+    required_scope IS NOT DISTINCT FROM CASE
+      WHEN payload ->> 'domain' = 'anytype' THEN
+        CASE payload -> 'operation' ->> 'type'
+          WHEN 'object.read' THEN 'anytype.objects.read'::scope_name
+          WHEN 'object.query' THEN 'anytype.objects.read'::scope_name
+          WHEN 'object.create' THEN 'anytype.objects.write'::scope_name
+          WHEN 'object.update' THEN 'anytype.objects.write'::scope_name
+          WHEN 'object.archive' THEN 'anytype.objects.write'::scope_name
+          WHEN 'collection.read' THEN 'anytype.collections.read'::scope_name
+          WHEN 'collection.members.add' THEN 'anytype.collections.write'::scope_name
+          WHEN 'collection.members.remove' THEN 'anytype.collections.write'::scope_name
+          WHEN 'file.download' THEN 'anytype.files.read'::scope_name
+          WHEN 'file.upload' THEN 'anytype.files.write'::scope_name
+          WHEN 'file.attach' THEN 'anytype.files.write'::scope_name
+          WHEN 'chat.read' THEN 'anytype.chats.read'::scope_name
+          WHEN 'chat.send' THEN 'anytype.chats.send'::scope_name
+          ELSE NULL
+        END
+      WHEN payload ->> 'domain' = 'publication' THEN
+        CASE payload -> 'operation' ->> 'type'
+          WHEN 'publication.disable' THEN 'publications.write'::scope_name
+          WHEN 'publication.rollback' THEN 'publications.write'::scope_name
+          WHEN 'publication.unpublish' THEN 'publications.unpublish'::scope_name
+          ELSE NULL
+        END
+      ELSE NULL
+    END
+  );
+
 CREATE FUNCTION claim_command(
   p_tenant_id uuid,
   p_connector_id uuid,
@@ -69,7 +101,7 @@ AS $$
     WHERE tenant_id = p_tenant_id
       AND connector_id = p_connector_id
       AND required_scope = ANY(p_allowed_scopes)
-      AND expires_at > p_now
+      AND expires_at > p_now + make_interval(secs => LEAST(p_lease_seconds, 15))
       AND attempt_count < max_attempts
       AND (
         (state = 'pending' AND not_before <= p_now)
@@ -132,6 +164,7 @@ $$;
 
 CREATE FUNCTION extend_command_lease(
   p_tenant_id uuid,
+  p_connector_id uuid,
   p_command_id uuid,
   p_attempt integer,
   p_now timestamptz,
@@ -146,12 +179,16 @@ SET search_path = public, pg_temp
 AS $$
   UPDATE commands
   SET
-    lease_expires_at = LEAST(
-      expires_at,
-      p_now + make_interval(secs => p_lease_seconds)
+    lease_expires_at = GREATEST(
+      lease_expires_at,
+      LEAST(
+        expires_at,
+        p_now + make_interval(secs => p_lease_seconds)
+      )
     ),
     updated_at = p_now
   WHERE tenant_id = p_tenant_id
+    AND connector_id = p_connector_id
     AND id = p_command_id
     AND state = 'leased'
     AND attempt_count = p_attempt
@@ -159,12 +196,12 @@ AS $$
     AND lease_expires_at > p_now
     AND expires_at > p_now
     AND p_lease_seconds BETWEEN 5 AND 300
-    AND p_now + make_interval(secs => p_lease_seconds) > lease_expires_at
   RETURNING lease_expires_at
 $$;
 
 CREATE FUNCTION complete_command(
   p_tenant_id uuid,
+  p_connector_id uuid,
   p_command_id uuid,
   p_attempt integer,
   p_now timestamptz,
@@ -227,6 +264,7 @@ BEGIN
     SELECT 1
     FROM commands AS command
     WHERE command.tenant_id = p_tenant_id
+      AND command.connector_id = p_connector_id
       AND command.id = p_command_id
       AND command.state = 'leased'
       AND command.attempt_count = p_attempt
@@ -252,6 +290,7 @@ BEGIN
       SELECT 'unknown-lease'::text, command.state
       FROM commands AS command
       WHERE command.tenant_id = p_tenant_id
+        AND command.connector_id = p_connector_id
         AND command.id = p_command_id;
     RETURN;
   END IF;
@@ -261,19 +300,10 @@ BEGIN
       SELECT 'duplicate'::text, command.state
       FROM commands AS command
       WHERE command.tenant_id = p_tenant_id
+        AND command.connector_id = p_connector_id
         AND command.id = p_command_id;
     RETURN;
   END IF;
-
-  UPDATE command_attempts
-  SET
-    completed_at = p_now,
-    outcome = p_outcome,
-    error_code = p_error_code
-  WHERE tenant_id = p_tenant_id
-    AND command_id = p_command_id
-    AND attempt = p_attempt
-    AND lease_token_digest = p_lease_token_digest;
 
   UPDATE commands AS command
   SET
@@ -306,6 +336,7 @@ BEGIN
     error_code = p_error_code,
     updated_at = p_now
   WHERE command.tenant_id = p_tenant_id
+    AND command.connector_id = p_connector_id
     AND command.id = p_command_id
     AND command.state = 'leased'
     AND command.attempt_count = p_attempt
@@ -319,17 +350,29 @@ BEGIN
       SELECT 'stale'::text, command.state
       FROM commands AS command
       WHERE command.tenant_id = p_tenant_id
+        AND command.connector_id = p_connector_id
         AND command.id = p_command_id;
     RETURN;
   END IF;
+
+  UPDATE command_attempts
+  SET
+    completed_at = p_now,
+    outcome = p_outcome,
+    error_code = p_error_code
+  WHERE tenant_id = p_tenant_id
+    AND command_id = p_command_id
+    AND attempt = p_attempt
+    AND lease_token_digest = p_lease_token_digest;
 
   RETURN QUERY SELECT 'accepted'::text, next_state;
 END
 $$;
 
 REVOKE ALL ON FUNCTION claim_command(uuid, uuid, scope_name[], timestamptz, text, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION extend_command_lease(uuid, uuid, integer, timestamptz, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION extend_command_lease(uuid, uuid, uuid, integer, timestamptz, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION complete_command(
+  uuid,
   uuid,
   uuid,
   integer,
@@ -344,7 +387,10 @@ REVOKE ALL ON FUNCTION complete_command(
 
 GRANT knot_resolver TO CURRENT_USER;
 GRANT CREATE ON SCHEMA public TO knot_resolver;
+-- The migration owner must hold ADMIN OPTION on knot_resolver so this function can
+-- run with a role that has only tenant-scoped command access.
 ALTER FUNCTION complete_command(
+  uuid,
   uuid,
   uuid,
   integer,
@@ -360,8 +406,9 @@ ALTER FUNCTION complete_command(
 GRANT SELECT, UPDATE ON commands, command_attempts TO knot_resolver;
 
 GRANT EXECUTE ON FUNCTION claim_command(uuid, uuid, scope_name[], timestamptz, text, integer) TO knot_app;
-GRANT EXECUTE ON FUNCTION extend_command_lease(uuid, uuid, integer, timestamptz, text, integer) TO knot_app;
+GRANT EXECUTE ON FUNCTION extend_command_lease(uuid, uuid, uuid, integer, timestamptz, text, integer) TO knot_app;
 GRANT EXECUTE ON FUNCTION complete_command(
+  uuid,
   uuid,
   uuid,
   integer,

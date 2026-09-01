@@ -9,7 +9,7 @@ import {
 } from "@imai/knot-cloud-contract";
 import { describe, expect, it } from "vitest";
 
-import type { ReplayNonceStore } from "@/lib/ports";
+import type { ConnectorRateLimitStore, ReplayNonceStore } from "@/lib/ports";
 
 import { createApiKey, extractApiKeyId, verifyApiKey } from "./api-key";
 import {
@@ -171,6 +171,32 @@ describe("connector authentication", () => {
         nowUnixSeconds: now,
       }),
     ).rejects.toThrow("nonce store unavailable");
+  });
+
+  it("rate limits a known connector before signature verification", async () => {
+    const { connector, headers } = await signedFixture();
+    let nonceClaims = 0;
+    const rateLimits: ConnectorRateLimitStore = {
+      consume: () => Promise.resolve(false),
+    };
+
+    await expect(
+      authenticateConnectorRequest({
+        request: new Request(`https://${authority}${path}`, {
+          method: "POST",
+          headers,
+        }),
+        body,
+        connectors: { findActiveConnector: () => Promise.resolve(connector) },
+        nonces: {
+          claim: () => ((nonceClaims += 1), Promise.resolve("claimed")),
+        },
+        rateLimits,
+        allowedAuthorities: [authority],
+        nowUnixSeconds: now,
+      }),
+    ).rejects.toMatchObject({ code: "rate-limited", status: 429 });
+    expect(nonceClaims).toBe(0);
   });
 
   it("rejects a request for another deployment authority", async () => {
