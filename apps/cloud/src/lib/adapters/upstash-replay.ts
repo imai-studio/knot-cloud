@@ -1,9 +1,19 @@
 import { Redis } from "@upstash/redis";
 
 import { getUpstashEnvironment } from "@/lib/env";
-import type { ReplayNonceStore } from "@/lib/ports";
+import type { ConnectorRateLimitStore, ReplayNonceStore } from "@/lib/ports";
 
-export class UpstashReplayNonceStore implements ReplayNonceStore {
+const incrementWindowScript = `
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`;
+
+export class UpstashReplayNonceStore
+  implements ReplayNonceStore, ConnectorRateLimitStore
+{
   async claim(input: {
     connectorId: string;
     nonce: string;
@@ -24,6 +34,29 @@ export class UpstashReplayNonceStore implements ReplayNonceStore {
     );
 
     return result === "OK" ? "claimed" : "replayed";
+  }
+
+  async consume(input: {
+    connectorId: string;
+    limit: number;
+    windowSeconds: number;
+    nowUnixSeconds: number;
+  }): Promise<boolean> {
+    if (
+      !Number.isInteger(input.limit) ||
+      input.limit < 1 ||
+      !Number.isInteger(input.windowSeconds) ||
+      input.windowSeconds < 1
+    ) {
+      throw new TypeError("Rate limit and window must be positive integers");
+    }
+    const window = Math.floor(input.nowUnixSeconds / input.windowSeconds);
+    const count = await getRedis().eval<unknown[], number>(
+      incrementWindowScript,
+      [`connector-rate:${input.connectorId}:${window}`],
+      [String(input.windowSeconds + 1)],
+    );
+    return count <= input.limit;
   }
 }
 

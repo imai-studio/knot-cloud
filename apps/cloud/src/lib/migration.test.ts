@@ -256,6 +256,34 @@ describe("P0 database isolation", () => {
     );
   });
 
+  it("rejects a command whose required scope does not match its operation", async () => {
+    await expect(
+      database.exec(`
+        INSERT INTO commands (
+          tenant_id,
+          connector_id,
+          required_scope,
+          payload,
+          not_before,
+          expires_at,
+          idempotency_key,
+          created_by_kind,
+          created_by_id
+        ) VALUES (
+          '${tenantA}',
+          '${connectorA}',
+          'anytype.objects.read',
+          '{"domain":"anytype","operation":{"type":"object.update"}}',
+          now(),
+          now() + interval '1 hour',
+          'scope-mismatch-command',
+          'consumer-api-key',
+          '${apiKeyA}'
+        )
+      `),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
   it("fences stale command results and records every claimed attempt", async () => {
     const command = "00000000-0000-4000-8000-000000000051";
     const firstDigest = "a".repeat(64);
@@ -336,10 +364,34 @@ describe("P0 database isolation", () => {
     expect(whileLeased.rows).toEqual([]);
 
     const wrongExtension = await database.query<{ expires_at: Date | null }>(
-      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6) AS expires_at",
-      [tenantA, command, 1, "2026-09-01T00:00:03Z", secondDigest, 60],
+      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6, $7) AS expires_at",
+      [
+        tenantA,
+        connectorA,
+        command,
+        1,
+        "2026-09-01T00:00:03Z",
+        secondDigest,
+        60,
+      ],
     );
     expect(wrongExtension.rows).toEqual([{ expires_at: null }]);
+
+    const shorterExtension = await database.query<{ expires_at: Date | null }>(
+      "SELECT extend_command_lease($1, $2, $3, $4, $5, $6, $7) AS expires_at",
+      [
+        tenantA,
+        connectorA,
+        command,
+        1,
+        "2026-09-01T00:00:03Z",
+        firstDigest,
+        15,
+      ],
+    );
+    expect(shorterExtension.rows[0]?.expires_at).toEqual(
+      new Date("2026-09-01T00:00:31.000Z"),
+    );
 
     const secondClaim = await database.query<{ attempt: number }>(
       "SELECT attempt FROM claim_command($1, $2, $3, $4, $5, $6)",
@@ -359,10 +411,10 @@ describe("P0 database isolation", () => {
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","stale":true}', NULL, false, 0
       )`,
-      [tenantA, command, 1, "2026-09-01T00:00:33Z", firstDigest],
+      [tenantA, connectorA, command, 1, "2026-09-01T00:00:33Z", firstDigest],
     );
     expect(staleResult.rows).toEqual([
       { completion_status: "stale", command_state: "leased" },
@@ -371,10 +423,10 @@ describe("P0 database isolation", () => {
     await expect(
       database.query(
         `SELECT * FROM complete_command(
-          $1, $2, $3, $4, $5, 'succeeded',
+          $1, $2, $3, $4, $5, $6, 'succeeded',
           '{"type":"object.read","crossTenant":true}', NULL, false, 0
         )`,
-        [tenantB, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+        [tenantB, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
       ),
     ).rejects.toThrow(
       "Command completion tenant does not match the active tenant",
@@ -383,10 +435,10 @@ describe("P0 database isolation", () => {
     await expect(
       database.query(
         `SELECT * FROM complete_command(
-          $1, $2, $3, $4, $5, 'succeeded',
+          $1, $2, $3, $4, $5, $6, 'succeeded',
           '{"type":"object.update"}', NULL, false, 0
         )`,
-        [tenantA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
+        [tenantA, connectorA, command, 2, "2026-09-01T00:00:33Z", secondDigest],
       ),
     ).rejects.toThrow(
       "Command result type does not match the leased operation",
@@ -397,10 +449,10 @@ describe("P0 database isolation", () => {
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","ok":true}', NULL, false, 0
       )`,
-      [tenantA, command, 2, "2026-09-01T00:00:34Z", secondDigest],
+      [tenantA, connectorA, command, 2, "2026-09-01T00:00:34Z", secondDigest],
     );
     expect(acceptedResult.rows).toEqual([
       { completion_status: "accepted", command_state: "succeeded" },
@@ -411,10 +463,10 @@ describe("P0 database isolation", () => {
       command_state: string;
     }>(
       `SELECT * FROM complete_command(
-        $1, $2, $3, $4, $5, 'succeeded',
+        $1, $2, $3, $4, $5, $6, 'succeeded',
         '{"type":"object.read","ok":true}', NULL, false, 0
       )`,
-      [tenantA, command, 2, "2026-09-01T00:00:35Z", secondDigest],
+      [tenantA, connectorA, command, 2, "2026-09-01T00:00:35Z", secondDigest],
     );
     expect(duplicateResult.rows).toEqual([
       { completion_status: "duplicate", command_state: "succeeded" },
@@ -431,7 +483,7 @@ describe("P0 database isolation", () => {
       [tenantA, command],
     );
     expect(attempts.rows).toEqual([
-      { attempt: 1, outcome: "succeeded" },
+      { attempt: 1, outcome: null },
       { attempt: 2, outcome: "succeeded" },
     ]);
   });

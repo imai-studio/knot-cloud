@@ -89,6 +89,50 @@ describe("connector command HTTP service", () => {
       allowedScopes: ["anytype.objects.read"],
       leaseSeconds: 60,
     });
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a malformed claimed command without stranding its lease", async () => {
+    const complete = vi
+      .fn<CommandLedger["complete"]>()
+      .mockResolvedValue({ status: "accepted", state: "failed" });
+    const claim = vi.fn<CommandLedger["claim"]>().mockResolvedValue({
+      commandId,
+      requiredScope: "anytype.objects.read",
+      payload: { domain: "anytype", operation: { type: "not-real" } },
+      createdByKind: "consumer-api-key",
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      notBefore: new Date("2026-09-01T00:00:00Z"),
+      expiresAt: new Date("2026-09-01T00:10:00Z"),
+      attempt: 1,
+      leaseToken: "lease_token_1234567890abcdefghijklmnop",
+      leaseExpiresAt: new Date("2026-09-01T00:01:00Z"),
+    });
+    const response = await handlers(commands({ claim, complete })).claim(
+      request(`/api/v1/connectors/${connectorId}/commands/claim`, {
+        protocolVersion: "1.0",
+        maximumCommands: 1,
+        leaseSeconds: 60,
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      commandClaimResponseSchema.parse(await response.json()).commands,
+    ).toEqual([]);
+    expect(complete).toHaveBeenCalledWith({
+      tenantId,
+      connectorId,
+      commandId,
+      attempt: 1,
+      leaseToken: "lease_token_1234567890abcdefghijklmnop",
+      completion: {
+        outcome: "failed",
+        retryable: false,
+        errorCode: "invalid-command-envelope",
+      },
+    });
   });
 
   it("rejects a signed connector that does not match the route", async () => {
@@ -188,5 +232,47 @@ describe("connector command HTTP service", () => {
       "payload-too-large",
     );
     expect(authenticated).toBe(false);
+  });
+
+  it("accepts a legal command result larger than the control-route limit", async () => {
+    const complete = vi.fn<CommandLedger["complete"]>().mockResolvedValue({
+      status: "accepted",
+      state: "succeeded",
+    });
+    const response = await handlers(commands({ complete })).complete(
+      request(`/api/v1/connectors/${connectorId}/commands/result`, {
+        protocolVersion: "1.0",
+        commandId,
+        attempt: 1,
+        leaseToken: "lease_token_1234567890abcdefghijklmnop",
+        result: {
+          outcome: "succeeded",
+          result: {
+            type: "chat.read",
+            spaceId: "space-1",
+            chatId: "chat-1",
+            messages: [
+              {
+                messageId: "message-1",
+                text: "x".repeat(70 * 1024),
+                sentAt: 1,
+                senderDigest: "a".repeat(64),
+                provenance: {
+                  kind: "connector-attested-anytype",
+                  connectorId,
+                  senderDigest: "a".repeat(64),
+                  spaceId: "space-1",
+                  messageId: "message-1",
+                },
+              },
+            ],
+          },
+        },
+      }),
+      connectorId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(complete).toHaveBeenCalledOnce();
   });
 });
