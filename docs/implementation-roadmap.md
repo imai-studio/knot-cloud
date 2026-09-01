@@ -68,6 +68,10 @@ without those controls is incomplete.
 
 Prerequisites: P2 command transport and stable local operation handlers.
 
+Implementation PR: the scoped API branch contains the server routes, durable quota and idempotency
+fences, API-key controls, and dashboard key management. This remains unreleased until its stacked
+dependencies pass review and the release record changes.
+
 - Add human controls to create, inspect, rotate, and revoke consumer API keys.
 - Bind each key to explicit scopes and one or more connectors.
 - Accept only the typed Anytype operation union from the protocol package.

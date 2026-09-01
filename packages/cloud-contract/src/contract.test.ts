@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { anytypeOperationRequestSchema } from "./anytype-operation.js";
 import { canonicalJson, sha256Hex } from "./canonical-json.js";
 import { commandEnvelopeSchema } from "./command.js";
+import { consumerApiKeyCreateSchema } from "./consumer-api-key.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
 import { pairingGrantSchema, pairingSessionPollSchema } from "./pairing.js";
 import { protocolVersion } from "./protocol.js";
@@ -246,5 +247,29 @@ describe("pairing identifiers", () => {
         slugGrants: [],
       }),
     ).toThrow(/unique/u);
+  });
+});
+
+describe("consumer API-key controls", () => {
+  it("accepts only explicit Anytype scopes and connector UUIDs", () => {
+    const value = consumerApiKeyCreateSchema.parse({
+      name: "Reporting",
+      scopes: ["anytype.objects.read", "anytype.objects.read"],
+      connectorIds: [
+        "00000000-0000-4000-8000-000000000001",
+        "00000000-0000-4000-8000-000000000001",
+      ],
+    });
+    expect(value.scopes).toEqual(["anytype.objects.read"]);
+    expect(value.connectorIds).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+    ]);
+    expect(() =>
+      consumerApiKeyCreateSchema.parse({
+        name: "Publisher",
+        scopes: ["publications.write"],
+        connectorIds: ["00000000-0000-4000-8000-000000000001"],
+      }),
+    ).toThrow();
   });
 });

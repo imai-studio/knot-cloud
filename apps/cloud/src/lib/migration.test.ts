@@ -454,6 +454,199 @@ describe("P0 database isolation", () => {
     ).rejects.toMatchObject({ code: "23514" });
   });
 
+  it("enqueues consumer operations with tenant, scope, connector, idempotency, and quota fences", async () => {
+    await database.exec(`
+      UPDATE connectors
+      SET scopes = '{anytype.objects.read}'
+      WHERE id = '${connectorA}';
+      UPDATE api_keys
+      SET scopes = '{anytype.objects.read}', requests_per_minute = 1, requests_per_day = 10
+      WHERE id = '${apiKeyA}';
+      INSERT INTO api_key_connectors (tenant_id, api_key_id, connector_id)
+      VALUES ('${tenantA}', '${apiKeyA}', '${connectorA}');
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const operation = JSON.stringify({
+      type: "object.read",
+      spaceId: "space-1",
+      objectId: "object-1",
+    });
+    const enqueue = (
+      key: string,
+      requestDigest: string,
+      scope = "anytype.objects.read",
+    ) =>
+      database.query<{
+        command_id: string;
+        command_state: string;
+        was_created: boolean;
+      }>(
+        `SELECT * FROM enqueue_consumer_operation(
+          $1::uuid, $2::uuid, $3::uuid, $4::scope_name, $5::jsonb, $6::text, $7::text,
+          clock_timestamp(), clock_timestamp() + interval '10 minutes', $8::text, 1::smallint
+        )`,
+        [
+          tenantA,
+          apiKeyA,
+          connectorA,
+          scope,
+          operation,
+          key,
+          requestDigest,
+          "a".repeat(64),
+        ],
+      );
+
+    const first = await enqueue("consumer-operation-0001", "b".repeat(64));
+    expect(first.rows).toEqual([
+      expect.objectContaining({ command_state: "pending", was_created: true }),
+    ]);
+    const repeated = await enqueue("consumer-operation-0001", "b".repeat(64));
+    expect(repeated.rows).toEqual([
+      {
+        command_id: first.rows[0]!.command_id,
+        command_state: "pending",
+        was_created: false,
+      },
+    ]);
+    await expect(
+      enqueue("consumer-operation-0001", "c".repeat(64)),
+    ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      enqueue("consumer-operation-0002", "d".repeat(64)),
+    ).rejects.toThrow("API key quota exceeded");
+    await expect(
+      enqueue(
+        "consumer-operation-0003",
+        "e".repeat(64),
+        "anytype.objects.write",
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    const audit = await database.query<{
+      actor_digest: string;
+      metadata: { connectorId: string; scope: string };
+    }>(
+      `SELECT actor_digest, metadata
+       FROM audit_events
+       WHERE tenant_id = $1 AND target_id = $2`,
+      [tenantA, first.rows[0]!.command_id],
+    );
+    expect(audit.rows).toEqual([
+      {
+        actor_digest: "a".repeat(64),
+        metadata: {
+          connectorId: connectorA,
+          scope: "anytype.objects.read",
+        },
+      },
+    ]);
+
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantB,
+    ]);
+    const hidden = await database.query<{ id: string }>(
+      "SELECT id FROM commands WHERE id = $1",
+      [first.rows[0]!.command_id],
+    );
+    expect(hidden.rows).toEqual([]);
+  });
+
+  it("creates, rotates, resolves, and revokes a connector-bound API key", async () => {
+    await database.exec(`
+      UPDATE connectors
+      SET scopes = '{anytype.objects.read}'
+      WHERE id = '${connectorA}';
+      SET ROLE knot_app;
+      SELECT set_config('app.tenant_id', '${tenantA}', false);
+    `);
+    const created = await database.query<{ id: string }>(
+      `SELECT create_consumer_api_key(
+        $1::uuid, $2::uuid, 'Read integration', 'qrstuvwxyzABCDEF', $3::text,
+        1::smallint, '{anytype.objects.read}'::scope_name[], $4::uuid[], NULL,
+        30, 1000
+      ) AS id`,
+      [
+        tenantA,
+        "00000000-0000-4000-8000-000000000099",
+        "1".repeat(64),
+        `{${connectorA}}`,
+      ],
+    );
+    const createdId = created.rows[0]!.id;
+    const resolved = await database.query<{
+      id: string;
+      connector_ids: string[];
+      requests_per_minute: number;
+    }>(
+      "SELECT id, connector_ids, requests_per_minute FROM resolve_consumer_api_key($1)",
+      ["qrstuvwxyzABCDEF"],
+    );
+    expect(resolved.rows).toEqual([
+      { id: createdId, connector_ids: [connectorA], requests_per_minute: 30 },
+    ]);
+
+    await expect(
+      database.query(
+        `SELECT create_consumer_api_key(
+          $1::uuid, $2::uuid, 'Cross tenant', 'ghijklmnopQRSTUV', $3::text,
+          1::smallint, '{anytype.objects.read}'::scope_name[], $4::uuid[], NULL,
+          30, 1000
+        )`,
+        [
+          tenantA,
+          "00000000-0000-4000-8000-000000000099",
+          "2".repeat(64),
+          `{${connectorB}}`,
+        ],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    const rotated = await database.query<{ rotated: boolean }>(
+      `SELECT rotate_consumer_api_key(
+        $1::uuid, $2::uuid, $3::uuid, 'WXYZabcdefghijkl', $4::text, 2::smallint
+      ) AS rotated`,
+      [
+        tenantA,
+        "00000000-0000-4000-8000-000000000099",
+        createdId,
+        "3".repeat(64),
+      ],
+    );
+    expect(rotated.rows).toEqual([{ rotated: true }]);
+    expect(
+      (
+        await database.query<{ id: string }>(
+          "SELECT id FROM resolve_consumer_api_key($1)",
+          ["qrstuvwxyzABCDEF"],
+        )
+      ).rows,
+    ).toEqual([]);
+    expect(
+      (
+        await database.query<{ id: string }>(
+          "SELECT id FROM resolve_consumer_api_key($1)",
+          ["WXYZabcdefghijkl"],
+        )
+      ).rows,
+    ).toEqual([{ id: createdId }]);
+
+    const revoked = await database.query<{ revoked: boolean }>(
+      "SELECT revoke_consumer_api_key($1::uuid, $2::uuid, $3::uuid) AS revoked",
+      [tenantA, "00000000-0000-4000-8000-000000000099", createdId],
+    );
+    expect(revoked.rows).toEqual([{ revoked: true }]);
+    expect(
+      (
+        await database.query<{ revoked_at: Date | null }>(
+          "SELECT revoked_at FROM resolve_consumer_api_key($1)",
+          ["WXYZabcdefghijkl"],
+        )
+      ).rows[0]!.revoked_at,
+    ).toBeInstanceOf(Date);
+  });
+
   it("completes failed and rejected attempts with SQL NULL results", async () => {
     const failedCommand = "00000000-0000-4000-8000-000000000052";
     const rejectedCommand = "00000000-0000-4000-8000-000000000053";
