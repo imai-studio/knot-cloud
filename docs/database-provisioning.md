@@ -42,13 +42,15 @@ The application verifies the runtime role before protected routes are enabled. C
 uses narrowly scoped security-definer functions owned by the no-login `knot_resolver` role; raw
 tenant table reads still fail closed before a tenant context is established.
 
-Signed connector routes also require an Upstash Redis database. Set `REPLAY_STORE_DRIVER=upstash`
-and a complete credential pair. Self-managed deployments can use `UPSTASH_REDIS_REST_URL` and
+Signed connector nonces are claimed transactionally in Postgres under a unique
+`(tenant_id, connector_id, nonce)` key. Redis is not correctness storage. Upstash is used only for
+availability-oriented abuse counters. Set `CONNECTOR_RATE_LIMIT_STORE_DRIVER=upstash` and a
+complete credential pair. Self-managed deployments can use `UPSTASH_REDIS_REST_URL` and
 `UPSTASH_REDIS_REST_TOKEN`; Vercel's official Upstash integration supplies `KV_REST_API_URL` and
 `KV_REST_API_TOKEN`. Explicit `UPSTASH_*` values take precedence over the Vercel names. Use a
 database dedicated to the deployment, and limit the token to that database. Run
 `pnpm --filter @imai/knot-cloud smoke:providers` before enabling connector traffic; the smoke check
-verifies the restricted Neon role, sends a read-only Redis `PING`, and performs a private R2
+verifies the restricted Neon role and durable nonce function, sends a read-only Redis `PING`, and performs a private R2
 write/read/delete round trip.
 
 Human workspace bootstrap and selection use separate functions owned by the no-login

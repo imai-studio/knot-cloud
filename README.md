@@ -68,8 +68,8 @@ commit any of these values. See
 [`docs/workspace-authorization.md`](docs/workspace-authorization.md) for the human session and tenant
 boundary.
 
-Signed connector routes require an Upstash Redis database for nonce replay protection and connector
-rate limits. Configure `REPLAY_STORE_DRIVER=upstash` plus either the explicit
+Signed connector routes claim replay nonces in Postgres. Upstash is used only for connector
+rate limits. Configure `CONNECTOR_RATE_LIMIT_STORE_DRIVER=upstash` plus either the explicit
 `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` pair or Vercel's official integration pair,
 `KV_REST_API_URL`/`KV_REST_API_TOKEN`. Explicit `UPSTASH_*` values take precedence; do not set only
 one value from either pair.

@@ -349,13 +349,12 @@ function readerHeaders(input?: {
   media?: boolean;
   authenticated?: boolean;
 }): Headers {
-  const noStore = input?.authenticated || !input?.media;
   const headers = new Headers({
-    "Cache-Control": noStore
-      ? input?.authenticated
-        ? "private, no-store, max-age=0"
-        : "no-store, max-age=0"
-      : "public, max-age=0, must-revalidate",
+    "Cache-Control": input?.authenticated
+      ? "private, no-store, max-age=0"
+      : "no-store, max-age=0",
+    "CDN-Cache-Control": "no-store",
+    "Cloudflare-CDN-Cache-Control": "no-store",
     "Content-Security-Policy": publicReaderCsp,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -364,13 +363,9 @@ function readerHeaders(input?: {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
+    "Vercel-CDN-Cache-Control": "no-store",
   });
-  if (noStore) {
-    headers.set("CDN-Cache-Control", "no-store");
-    headers.set("Cloudflare-CDN-Cache-Control", "no-store");
-    headers.set("Surrogate-Control", "no-store");
-    headers.set("Vercel-CDN-Cache-Control", "no-store");
-  }
+  headers.set("Surrogate-Control", "no-store");
   if (input?.authenticated) headers.set("Vary", "Cookie");
   if (input?.contentType) headers.set("Content-Type", input.contentType);
   if (input?.contentLength !== undefined) {

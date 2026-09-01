@@ -112,6 +112,44 @@ describe("connector authentication", () => {
     expect(expirations).toEqual([now + 600, now + 600]);
   });
 
+  it("retains a nonce across the full accepted timestamp-skew window", async () => {
+    const { connector, headers } = await signedFixture();
+    let simulatedNow = now - 300;
+    let retainedUntil: number | undefined;
+    const nonces: ReplayNonceStore = {
+      claim: ({ expiresAt }) => {
+        if (retainedUntil === undefined || retainedUntil <= simulatedNow) {
+          retainedUntil = expiresAt;
+          return Promise.resolve("claimed");
+        }
+        return Promise.resolve("replayed");
+      },
+    };
+    const connectors = {
+      findActiveConnector: () => Promise.resolve(connector),
+    };
+    const authenticate = () =>
+      authenticateConnectorRequest({
+        request: new Request(`https://${authority}${path}`, {
+          method: "POST",
+          headers,
+        }),
+        body,
+        connectors,
+        nonces,
+        allowedAuthorities: [authority],
+        nowUnixSeconds: simulatedNow,
+      });
+
+    await expect(authenticate()).resolves.toBeDefined();
+    expect(retainedUntil).toBe(now + 600);
+    simulatedNow = now + 300;
+    await expect(authenticate()).rejects.toMatchObject({
+      code: "replay-detected",
+      status: 409,
+    });
+  });
+
   it("rejects body tampering before consuming the nonce", async () => {
     const { connector, headers } = await signedFixture();
     let nonceClaims = 0;

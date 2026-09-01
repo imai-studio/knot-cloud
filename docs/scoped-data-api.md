@@ -50,6 +50,11 @@ The database checks the key scope, connector binding, connector scope, expiry, q
 the same transaction that creates the command. The local connector still applies its own policy
 before execution.
 
+Cloud sessions and consumer API keys create typed intents. They do not approve local workflows or
+change local management policy. The Cloud command vocabulary has no workflow-approval,
+workflow-management, or Relay authority operation. Only the local Knot operator boundary can grant
+an approval or change that policy.
+
 ## Read status
 
 Send `GET /api/v1/operations/{operationId}` with the same API key. The response can be pending,

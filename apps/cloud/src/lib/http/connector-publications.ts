@@ -18,8 +18,10 @@ import { ZodError, type ZodType } from "zod";
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
 import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
 import { ObjectDigestMismatchError, ObjectSizeError } from "@/lib/adapters/r2";
-import { UpstashReplayNonceStore } from "@/lib/adapters/upstash-replay";
-import { createObjectStore } from "@/lib/adapters/factory";
+import {
+  createObjectStore,
+  createReplayNonceStore,
+} from "@/lib/adapters/factory";
 import { getSigningAuthorities } from "@/lib/env";
 import type { ReplayNonceStore } from "@/lib/ports";
 import { PublicationService } from "@/lib/publications";
@@ -414,7 +416,7 @@ export function createProductionConnectorPublicationHandlers() {
   return createConnectorPublicationHandlers({
     service: new PublicationService(repository, createObjectStore()),
     connectors: new NeonConnectorRepository(),
-    nonces: new UpstashReplayNonceStore(),
+    nonces: createReplayNonceStore(),
     allowedAuthorities: getSigningAuthorities(),
   });
 }

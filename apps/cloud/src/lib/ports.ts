@@ -114,6 +114,7 @@ export class RevocableObjectReader {
 
 export interface ReplayNonceStore {
   claim(input: {
+    tenantId: string;
     connectorId: string;
     nonce: string;
     expiresAt: number;

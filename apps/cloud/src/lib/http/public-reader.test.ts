@@ -124,6 +124,9 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
+    );
     expect(response.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
     expect(response.headers.has("Set-Cookie")).toBe(false);
     expect(html).toContain(`/media/demo/${publicationId}/${digest}`);
@@ -345,8 +348,9 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
-    expect(response.headers.get("Cache-Control")).toBe(
-      "public, max-age=0, must-revalidate",
+    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
     );
     expect(response.headers.get("ETag")).toBe(`"sha256-${digest}"`);
   });
@@ -367,9 +371,7 @@ describe("public reader", () => {
     );
 
     expect(response.status).toBe(304);
-    expect(response.headers.get("Cache-Control")).toBe(
-      "public, max-age=0, must-revalidate",
-    );
+    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
     expect(deps.repository.resolveAsset).toHaveBeenCalledOnce();
     expect(deps.objects.get).not.toHaveBeenCalled();
   });

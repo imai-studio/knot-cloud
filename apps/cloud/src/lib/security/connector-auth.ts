@@ -158,9 +158,14 @@ export async function authenticateConnectorRequest(input: {
   }
 
   const nonceResult = await input.nonces.claim({
+    tenantId: connector.tenantId,
     connectorId,
     nonce,
-    expiresAt: now + maximumClockSkewSeconds * 2,
+    // Anchor retention to the signed timestamp, not first receipt. A request
+    // first seen at the early edge of the accepted skew window must remain
+    // fenced through the late edge even if application and database clocks
+    // differ slightly.
+    expiresAt: timestamp + maximumClockSkewSeconds * 2,
   });
   if (nonceResult === "replayed") {
     throw new ConnectorAuthenticationError("replay-detected", 409);
