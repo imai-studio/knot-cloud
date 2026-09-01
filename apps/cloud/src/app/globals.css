@@ -182,13 +182,7 @@
   body {
     @apply min-h-screen bg-background text-foreground;
     min-width: 320px;
-    background:
-      radial-gradient(
-        38rem 24rem at 8% -8%,
-        color-mix(in oklab, var(--primary) 9%, transparent),
-        transparent 72%
-      ),
-      var(--background);
+    background: var(--background);
   }
 
   button:not(:disabled),

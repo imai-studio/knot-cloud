@@ -33,7 +33,7 @@ export default function Home() {
       <div className="paper-grid pointer-events-none absolute inset-x-0 top-0 h-[44rem]" />
       <header className="relative z-20 bg-background/82 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-7xl items-center justify-between px-5 sm:px-8">
-          <Brand bare />
+          <Brand />
           <nav aria-label="Main navigation" className="flex items-center gap-2">
             <Link
               href="#how-it-works"
@@ -45,7 +45,7 @@ export default function Home() {
               href="/login"
               className={cn(
                 buttonVariants({ variant: "outline" }),
-                "h-10 rounded-full border-foreground/16 bg-background/70 px-5",
+                "h-11 rounded-full border-foreground/16 bg-background/70 px-5",
               )}
             >
               Sign in
@@ -196,9 +196,9 @@ function ControlPlanePreview() {
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 text-sm font-medium">
               <span className="size-2 rounded-full bg-success" />
-              imai workspace
+              Example workspace
             </div>
-            <span className="text-xs text-muted-foreground">Connected</span>
+            <span className="text-xs text-muted-foreground">Illustrative</span>
           </div>
 
           <div className="mt-7 flex flex-col rounded-2xl bg-background/72 px-5 py-2 ring-1 ring-foreground/8 sm:flex-row sm:items-stretch sm:px-2 sm:py-5">
@@ -249,7 +249,7 @@ function FlowStage({
         <span className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
           {eyebrow}
         </span>
-        {mark ? <BrandMark bare className="size-9" /> : null}
+        {mark ? <BrandMark className="size-9" /> : null}
       </div>
       <div className="min-w-0">
         <p className="text-lg font-semibold tracking-[-0.025em]">{title}</p>

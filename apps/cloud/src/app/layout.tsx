@@ -27,16 +27,13 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  colorScheme: "light dark",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fcfaf7" },
-    { media: "(prefers-color-scheme: dark)", color: "#17131d" },
-  ],
+  colorScheme: "light",
+  themeColor: "#fcfaf7",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" data-theme="light">
       <body className={`${inter.variable} font-sans`}>{children}</body>
     </html>
   );

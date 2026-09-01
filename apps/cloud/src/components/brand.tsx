@@ -6,11 +6,9 @@ import { cn } from "@/lib/utils";
 export function Brand({
   className,
   href = "/",
-  bare = false,
 }: {
   className?: string;
   href?: string;
-  bare?: boolean;
 }) {
   return (
     <Link
@@ -20,24 +18,17 @@ export function Brand({
         className,
       )}
     >
-      <BrandMark bare={bare} />
+      <BrandMark />
       <span>Knot</span>
     </Link>
   );
 }
 
-export function BrandMark({
-  className,
-  bare = false,
-}: {
-  className?: string;
-  bare?: boolean;
-}) {
+export function BrandMark({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-white shadow-none ring-1 ring-black/8 dark:ring-white/10",
-        bare && "rounded-none bg-transparent shadow-none ring-0 dark:ring-0",
+        "relative grid size-8 shrink-0 place-items-center",
         className,
       )}
       aria-hidden="true"
@@ -47,7 +38,7 @@ export function BrandMark({
         alt=""
         width={32}
         height={32}
-        className={cn("size-full object-cover", bare && "mix-blend-multiply")}
+        className="size-full scale-[1.6] object-contain"
       />
     </span>
   );

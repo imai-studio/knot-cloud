@@ -88,7 +88,7 @@ export function LoginForm({ initialError }: { initialError?: string }) {
             </AlertDescription>
           </Alert>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="border-t-0 bg-transparent pt-0">
           <Button
             type="button"
             variant="ghost"
@@ -158,7 +158,7 @@ export function LoginForm({ initialError }: { initialError?: string }) {
           </Button>
         </form>
       </CardContent>
-      <CardFooter className="justify-between gap-3 text-xs text-muted-foreground">
+      <CardFooter className="justify-between gap-3 border-t-0 bg-transparent pt-0 text-xs text-muted-foreground">
         <span>Invitation-only access</span>
         <Link
           href="/"
