@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
-  DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -136,9 +136,10 @@ const key = `tenants/${tenantId}/assets/${sha256.slice(0, 2)}/${sha256}`;
 const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  // Keep the smoke request identical to the runtime adapter: R2 accepts the
-  // explicit Content-MD5, but rejects an additional optional SDK checksum.
+  // Keep adapter-owned writes on one integrity header: R2 accepts the explicit
+  // Content-MD5, but rejects an additional optional SDK checksum.
   requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
@@ -194,7 +195,15 @@ try {
 } finally {
   try {
     if (uploaded) {
-      await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      const deleted = await r2.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: { Quiet: true, Objects: [{ Key: key }] },
+        }),
+      );
+      if (deleted.Errors && deleted.Errors.length > 0) {
+        throw new Error("R2 smoke cleanup reported an object deletion error");
+      }
     }
   } catch (cleanupError) {
     if (!operationFailed) throw cleanupError;
