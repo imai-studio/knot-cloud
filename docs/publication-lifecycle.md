@@ -73,7 +73,7 @@ operational metadata, but it must not retain the deleted document or media.
 
 Before release:
 
-- merge and deploy tenant bootstrap, connector pairing, signed connector routes, and replay storage;
+- merge and deploy tenant bootstrap, connector pairing, signed connector routes, and durable nonce storage;
 - run the managed-Neon two-tenant and lease-fencing tests;
 - run large direct-to-R2 upload and interruption tests against the production candidate;
 - provision a separate reader domain and pass its browser security tests;

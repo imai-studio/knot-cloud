@@ -43,7 +43,9 @@ export function problemResponse(input: {
     title: input.title,
     status: input.status,
     code: input.code,
-    detail: input.detail,
+    // Internal loggable failures may carry provider diagnostics at the call
+    // site. Keep those diagnostics out of both logs and model-facing bodies.
+    detail: input.logEvent ? undefined : input.detail,
     requestId,
     retryable: input.retryable ?? false,
     retryAfterSeconds: input.retryAfterSeconds,

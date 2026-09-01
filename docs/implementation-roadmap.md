@@ -19,7 +19,7 @@ Prerequisite: P0.
 - Check the first local connector candidate against the versioned protocol fixtures.
 - Exercise large streaming R2 uploads and server-side digest calculation.
 - Exercise Neon row locking, lease fencing, and two-tenant isolation against the managed database.
-- Provision the replay nonce store before enabling any signed mutation route.
+- Apply and probe the durable Postgres replay-nonce migration before enabling any signed mutation route.
 - Record CSP, cookie, DNS, and cross-origin tests for the chosen reader domain.
 
 P1 does not add a user-facing route. It closes infrastructure and browser security gates needed by
@@ -27,7 +27,7 @@ later routes.
 
 ## P2. Tenant bootstrap and connector pairing
 
-Prerequisites: P1 replay protection and managed-database tests.
+Prerequisites: P1 durable replay protection and managed-database tests.
 
 Candidate code is complete for the checked items, but it remains unreleased until its stacked changes
 merge and the managed deployment passes the release gates.

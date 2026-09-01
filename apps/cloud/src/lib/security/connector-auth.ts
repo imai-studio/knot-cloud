@@ -158,6 +158,7 @@ export async function authenticateConnectorRequest(input: {
   }
 
   const nonceResult = await input.nonces.claim({
+    tenantId: connector.tenantId,
     connectorId,
     nonce,
     expiresAt: now + maximumClockSkewSeconds * 2,

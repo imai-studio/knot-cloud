@@ -32,12 +32,12 @@ This file is the release contract. Plans belong in
 - Publication upload, public reader, rollback, disable, or unpublish routes.
 - Consumer API-key management and the Anytype data API.
 - A local connector configured to use Knot Cloud.
-- Upstash replay storage, queue workers, scheduled reconciliation, or hosted connectors.
+- Durable connector nonce claims, queue workers, scheduled reconciliation, or hosted connectors.
 - Custom reader domains, authenticated reader sessions, media derivatives, billing, or quota plans.
 
 The repository contains a reviewed candidate implementation of the signed command claim, lease,
 and result routes. That code is not part of the release contract until its pull request is merged,
-the command-ledger migration and Upstash configuration are applied in production, the provider
+the command-ledger and durable nonce migrations and Upstash rate-limit configuration are applied in production, the provider
 smoke check passes, and a deployed signed-request canary succeeds. Repository presence alone does
 not make a route released.
 

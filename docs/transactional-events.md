@@ -65,6 +65,8 @@ Postgres commits the event and its delivery rows together. Reusing the same idem
 body returns the original event. Reusing it with different content fails. Delivery claims use a
 lease fence, bounded exponential backoff, at most ten attempts, and a terminal dead-letter state.
 The maintenance route only drives this durable outbox; it is not another workflow scheduler.
+Neither webhook delivery nor a Cloud session can approve a workflow, change a workflow, or satisfy
+a local management-authority check.
 
 ## Delivery verification
 

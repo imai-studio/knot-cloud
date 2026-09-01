@@ -12,7 +12,10 @@ import { z, ZodError, type ZodType } from "zod";
 
 import { NeonCommandLedger } from "@/lib/adapters/neon-command-ledger";
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
-import { createReplayNonceStore } from "@/lib/adapters/factory";
+import {
+  createConnectorRateLimitStore,
+  createReplayNonceStore,
+} from "@/lib/adapters/factory";
 import {
   getAppBaseUrl,
   getCloudEnvironment,
@@ -401,12 +404,11 @@ export function createConnectorCommandHandlers(
 }
 
 export function createProductionConnectorCommandHandlers() {
-  const connectorSecurity = createReplayNonceStore();
   return createConnectorCommandHandlers({
     commands: new NeonCommandLedger(),
     connectors: new NeonConnectorRepository(),
-    nonces: connectorSecurity,
-    rateLimits: connectorSecurity,
+    nonces: createReplayNonceStore(),
+    rateLimits: createConnectorRateLimitStore(),
     allowedAuthorities: getSigningAuthorities(),
     problemBaseUrl: getCloudEnvironment().APP_BASE_URL,
   });

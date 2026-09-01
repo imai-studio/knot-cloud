@@ -123,6 +123,10 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
+    );
+    expect(response.headers.get("Vercel-CDN-Cache-Control")).toBe("no-store");
     expect(response.headers.has("Set-Cookie")).toBe(false);
     expect(html).toContain(`/media/demo/${publicationId}/${digest}`);
     expect(html).not.toContain("session=dashboard");
@@ -288,6 +292,50 @@ describe("public reader", () => {
       publicReaderCsp,
     );
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("downloads HTML assets with restrictive, cache-bypass headers", async () => {
+    const deps = dependencies({
+      resolveAsset: vi.fn().mockResolvedValue({
+        tenantId,
+        publicationId,
+        versionId,
+        sha256: digest,
+        contentType: "text/html",
+        byteSize: 3,
+      }),
+      get: vi.fn().mockResolvedValue({
+        descriptor: {
+          tenantId,
+          sha256: digest,
+          key: "private-key",
+          contentType: "text/html",
+          size: 3,
+        },
+        cacheControl: "private, no-store, max-age=0",
+        stream: bytes([1, 2, 3]),
+      }),
+    });
+    const response = await createPublicReaderHandlers({
+      ...deps,
+      environment,
+    }).media(
+      request(
+        `https://pages.example.org/media/demo/${publicationId}/${digest}`,
+      ),
+      "demo",
+      publicationId,
+      digest,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Disposition")).toMatch(/^attachment/u);
+    expect(response.headers.get("Content-Security-Policy")).toBe(
+      publicReaderCsp,
+    );
+    expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cloudflare-CDN-Cache-Control")).toBe(
+      "no-store",
+    );
   });
 });
 

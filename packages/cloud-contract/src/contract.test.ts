@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { anytypeOperationRequestSchema } from "./anytype-operation.js";
 import { canonicalJson, sha256Hex } from "./canonical-json.js";
-import { commandEnvelopeSchema } from "./command.js";
+import { commandEnvelopeSchema, commandPayloadSchema } from "./command.js";
 import { consumerApiKeyCreateSchema } from "./consumer-api-key.js";
 import { deriveIdempotencyKey } from "./idempotency.js";
 import { pairingGrantSchema, pairingSessionPollSchema } from "./pairing.js";
@@ -200,6 +200,25 @@ describe("typed remote operations", () => {
         operation: { type: "execute", prompt: "read the filesystem" },
       }),
     ).toThrow();
+  });
+
+  it("keeps workflow approval and management authority out of Cloud commands", () => {
+    for (const payload of [
+      {
+        domain: "workflow",
+        operation: { type: "workflow.approve", runId: "run-1" },
+      },
+      {
+        domain: "workflow",
+        operation: { type: "workflow.manage", workflowId: "workflow-1" },
+      },
+      {
+        domain: "relay",
+        operation: { type: "approval.grant", approvalId: "approval-1" },
+      },
+    ]) {
+      expect(() => commandPayloadSchema.parse(payload)).toThrow();
+    }
   });
 
   it("requires operation expiry to be later than creation", () => {

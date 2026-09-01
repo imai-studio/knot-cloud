@@ -248,13 +248,11 @@ function readerAccessRedirect(request: Request, siteSlug: string): Response {
   const url = new URL(request.url);
   const target = new URL(`/access/${encodeURIComponent(siteSlug)}`, url.origin);
   target.searchParams.set("next", `${url.pathname}${url.search}`);
+  const headers = readerHeaders();
+  headers.set("Location", target.toString());
   return new Response(null, {
     status: 307,
-    headers: {
-      "Cache-Control": "no-store, max-age=0",
-      Location: target.toString(),
-      "Referrer-Policy": "no-referrer",
-    },
+    headers,
   });
 }
 
@@ -323,6 +321,8 @@ function readerHeaders(input?: {
 }): Headers {
   const headers = new Headers({
     "Cache-Control": "no-store, max-age=0",
+    "CDN-Cache-Control": "no-store",
+    "Cloudflare-CDN-Cache-Control": "no-store",
     "Content-Security-Policy": publicReaderCsp,
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -331,6 +331,7 @@ function readerHeaders(input?: {
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
+    "Vercel-CDN-Cache-Control": "no-store",
   });
   if (input?.contentType) headers.set("Content-Type", input.contentType);
   if (input?.contentLength !== undefined) {

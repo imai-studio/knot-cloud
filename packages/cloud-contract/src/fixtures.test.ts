@@ -260,4 +260,63 @@ describe("closed operation vocabulary", () => {
       }),
     ).toThrow(/result type/u);
   });
+
+  it("keeps model-facing operation results closed and minimal", () => {
+    const base = {
+      protocolVersion: "1.0",
+      operationId: "operation-1",
+      connectorId: "connector-1",
+      operation: {
+        type: "object.read",
+        spaceId: "space-1",
+        objectId: "object-1",
+      },
+      createdAt: 1_788_192_000,
+      expiresAt: 1_788_192_600,
+    } as const;
+    expect(() =>
+      operationResourceSchema.parse({
+        ...base,
+        status: "failed",
+        attempt: 1,
+        willRetry: false,
+        problem: {
+          type: "https://knot.example/problems/internal-error",
+          title: "Operation failed",
+          status: 500,
+          code: "internal-error",
+          requestId: "request_1234567890abcdef",
+          retryable: false,
+        },
+        rawCloudBody: '{"document":"private"}',
+        signature: "signed-secret",
+        keyPath: "/private/connector-key.pem",
+      }),
+    ).toThrow();
+    expect(() =>
+      operationResourceSchema.parse({
+        ...base,
+        status: "succeeded",
+        completedAt: 1_788_192_100,
+        result: {
+          type: "object.read",
+          object: {
+            spaceId: "space-1",
+            objectId: "object-1",
+            typeKey: "note",
+            name: "Example",
+            properties: {},
+            provenance: {
+              kind: "connector-attested-anytype",
+              connectorId: "connector-1",
+              senderDigest: "a".repeat(64),
+              spaceId: "space-1",
+              objectId: "object-1",
+            },
+          },
+          rawCloudBody: "provider response",
+        },
+      }),
+    ).toThrow();
+  });
 });
