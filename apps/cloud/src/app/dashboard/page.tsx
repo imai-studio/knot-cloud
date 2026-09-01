@@ -237,9 +237,7 @@ export default async function DashboardPage({
               initialSites={initialSites}
             />
           ) : null}
-          {view === "api-keys" ? (
-            <ApiKeyManager initialKeys={apiKeys} />
-          ) : null}
+          {view === "api-keys" ? <ApiKeyManager initialKeys={apiKeys} /> : null}
           {view !== "overview" &&
           view !== "connectors" &&
           view !== "sites" &&
