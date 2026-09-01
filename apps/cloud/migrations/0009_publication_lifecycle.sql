@@ -1095,7 +1095,7 @@ GRANT EXECUTE ON FUNCTION enqueue_publication_orphan_deletions(uuid, timestamptz
 GRANT EXECUTE ON FUNCTION list_publication_maintenance_tenants(timestamptz, integer, integer) TO knot_app;
 GRANT EXECUTE ON FUNCTION schedule_publication_maintenance(uuid, timestamptz) TO knot_app;
 
-GRANT knot_resolver TO knot_migrator;
+GRANT knot_resolver TO CURRENT_USER;
 GRANT CREATE ON SCHEMA public TO knot_resolver;
 GRANT SELECT, INSERT, UPDATE, DELETE ON publication_maintenance_schedule TO knot_resolver;
 ALTER FUNCTION schedule_publication_maintenance(uuid, timestamptz)
@@ -1103,4 +1103,4 @@ ALTER FUNCTION schedule_publication_maintenance(uuid, timestamptz)
 ALTER FUNCTION list_publication_maintenance_tenants(timestamptz, integer, integer)
   OWNER TO knot_resolver;
 REVOKE CREATE ON SCHEMA public FROM knot_resolver;
-REVOKE knot_resolver FROM knot_migrator;
+REVOKE knot_resolver FROM CURRENT_USER;
