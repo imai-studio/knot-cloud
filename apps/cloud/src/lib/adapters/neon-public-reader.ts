@@ -7,11 +7,39 @@ import {
 import { ensureRuntimeDatabaseRole, getSql } from "./neon";
 
 export class NeonPublicReaderRepository implements PublicReaderRepository {
-  async resolvePage(input: { siteSlug: string; publicationSlug: string }) {
+  async resolveSiteAccess(siteSlug: string) {
     await ensureRuntimeDatabaseRole();
     const rows = await getSql()`
-      SELECT * FROM resolve_public_reader_page(
-        ${input.siteSlug}, ${input.publicationSlug}
+      SELECT resolve_reader_site_access(${siteSlug}) AS reader_access
+    `;
+    const access = rows[0]?.reader_access;
+    return access === "public" || access === "authenticated"
+      ? access
+      : undefined;
+  }
+
+  async resolveCustomDomainSite(hostname: string) {
+    await ensureRuntimeDatabaseRole();
+    const rows = await getSql()`
+      SELECT * FROM resolve_custom_domain_site(${hostname})
+    `;
+    const row = rows[0] as
+      | { site_slug: string; reader_access: "public" | "authenticated" }
+      | undefined;
+    return row
+      ? { siteSlug: row.site_slug, readerAccess: row.reader_access }
+      : undefined;
+  }
+
+  async resolvePage(input: {
+    siteSlug: string;
+    publicationSlug: string;
+    sessionDigest?: string;
+  }) {
+    await ensureRuntimeDatabaseRole();
+    const rows = await getSql()`
+      SELECT * FROM resolve_reader_page(
+        ${input.siteSlug}, ${input.publicationSlug}, ${input.sessionDigest ?? ""}
       )
     `;
     const row = rows[0] as
@@ -41,11 +69,13 @@ export class NeonPublicReaderRepository implements PublicReaderRepository {
     siteSlug: string;
     publicationId: string;
     sha256: string;
+    sessionDigest?: string;
   }): Promise<PublicAssetRecord | undefined> {
     await ensureRuntimeDatabaseRole();
     const rows = await getSql()`
-      SELECT * FROM resolve_public_reader_asset(
-        ${input.siteSlug}, ${input.publicationId}::uuid, ${input.sha256}
+      SELECT * FROM resolve_reader_asset(
+        ${input.siteSlug}, ${input.publicationId}::uuid, ${input.sha256},
+        ${input.sessionDigest ?? ""}
       )
     `;
     const row = rows[0] as

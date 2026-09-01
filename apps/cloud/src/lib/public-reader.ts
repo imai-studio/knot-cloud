@@ -23,14 +23,24 @@ export interface PublicAssetRecord extends ObjectLocator {
 }
 
 export interface PublicReaderRepository {
+  resolveCustomDomainSite?(
+    hostname: string,
+  ): Promise<
+    { siteSlug: string; readerAccess: "public" | "authenticated" } | undefined
+  >;
+  resolveSiteAccess?(
+    siteSlug: string,
+  ): Promise<"public" | "authenticated" | undefined>;
   resolvePage(input: {
     siteSlug: string;
     publicationSlug: string;
+    sessionDigest?: string;
   }): Promise<PublicPageRecord | undefined>;
   resolveAsset(input: {
     siteSlug: string;
     publicationId: string;
     sha256: string;
+    sessionDigest?: string;
   }): Promise<PublicAssetRecord | undefined>;
 }
 

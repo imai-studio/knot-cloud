@@ -103,6 +103,8 @@ restricted `knot_app` role. See
   deployment checks.
 - [`docs/scoped-data-api.md`](docs/scoped-data-api.md): P4 key controls, typed operation submission,
   and status retrieval.
+- [`docs/platform-extensions.md`](docs/platform-extensions.md): unreleased custom-domain,
+  authenticated-reader, quota, and provider boundaries.
 - [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
 - [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned

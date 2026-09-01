@@ -77,14 +77,20 @@ export function decodeAuditCursor(value: string): AuditCursor | undefined {
 const safeMetadataKeys = new Set([
   "connectors",
   "connectorId",
+  "errorCode",
+  "hostname",
+  "maxRedemptions",
   "newName",
   "oldName",
   "priorScopes",
+  "readerAccess",
   "requestSha256",
   "scope",
   "scopes",
   "siteIds",
+  "siteId",
   "slugGrants",
+  "versionId",
 ]);
 
 export function publicAuditMetadata(value: unknown): Record<string, unknown> {

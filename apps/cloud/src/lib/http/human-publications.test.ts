@@ -148,6 +148,7 @@ describe("human publication HTTP service", () => {
     expect(body.code).toBe("not-found");
     expect(control).toHaveBeenCalledWith({
       tenantId,
+      userId: authorized.workspace.userId,
       operation: { type: "publication.disable", publicationId },
     });
   });

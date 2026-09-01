@@ -33,6 +33,7 @@ for (const name of required) {
     throw new Error(`${name} is required`);
   }
 }
+validateContentOrigin(process.env.APP_BASE_URL, process.env.CONTENT_BASE_URL);
 if ((process.env.REPLAY_STORE_DRIVER ?? "upstash") !== "upstash") {
   throw new Error("REPLAY_STORE_DRIVER must be upstash for this deployment");
 }
@@ -196,4 +197,33 @@ function requiredEnvironmentValue(name) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+function validateContentOrigin(applicationValue, contentValue) {
+  if (!contentValue || contentValue.trim() === "") return;
+  const application = new URL(applicationValue);
+  const content = new URL(contentValue);
+  if (
+    content.username ||
+    content.password ||
+    content.pathname !== "/" ||
+    content.search ||
+    content.hash ||
+    content.protocol !== "https:"
+  ) {
+    throw new Error("CONTENT_BASE_URL must be a bare HTTPS origin");
+  }
+  if (
+    content.origin === application.origin ||
+    registrableApproximation(content.hostname) ===
+      registrableApproximation(application.hostname)
+  ) {
+    throw new Error(
+      "CONTENT_BASE_URL must use a separate registrable domain from APP_BASE_URL",
+    );
+  }
+}
+
+function registrableApproximation(hostname) {
+  return hostname.toLowerCase().split(".").filter(Boolean).slice(-2).join(".");
 }

@@ -36,6 +36,8 @@ const environment = { baseUrl: new URL("https://pages.example.org") };
 function dependencies(input?: {
   resolvePage?: PublicReaderRepository["resolvePage"];
   resolveAsset?: PublicReaderRepository["resolveAsset"];
+  resolveSiteAccess?: PublicReaderRepository["resolveSiteAccess"];
+  resolveCustomDomainSite?: PublicReaderRepository["resolveCustomDomainSite"];
   get?: PublicAssetStore["get"];
 }) {
   const repository: PublicReaderRepository = {
@@ -50,6 +52,12 @@ function dependencies(input?: {
         contentType: "image/png",
         byteSize: 3,
       }),
+    ...(input?.resolveSiteAccess
+      ? { resolveSiteAccess: input.resolveSiteAccess }
+      : {}),
+    ...(input?.resolveCustomDomainSite
+      ? { resolveCustomDomainSite: input.resolveCustomDomainSite }
+      : {}),
   };
   const objects: PublicAssetStore = {
     get:
@@ -133,6 +141,67 @@ describe("public reader", () => {
       environment,
     }).page(request("https://pages.example.org/p/demo/guide"), "demo", "guide");
     expect(response.status).toBe(404);
+  });
+
+  it("redirects authenticated sites to grant exchange and hashes valid session cookies", async () => {
+    const resolvePage = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(page)
+      .mockResolvedValueOnce(page);
+    const deps = dependencies({
+      resolvePage,
+      resolveSiteAccess: vi.fn().mockResolvedValue("authenticated"),
+    });
+    const handler = createPublicReaderHandlers({ ...deps, environment });
+    const redirect = await handler.page(
+      request("https://pages.example.org/p/demo/guide"),
+      "demo",
+      "guide",
+    );
+    expect(redirect.status).toBe(307);
+    expect(redirect.headers.get("Location")).toBe(
+      "https://pages.example.org/access/demo?next=%2Fp%2Fdemo%2Fguide",
+    );
+
+    const token = `knot_session_${"a".repeat(43)}`;
+    const response = await handler.page(
+      request(
+        "https://pages.example.org/p/demo/guide",
+        `ignored=x; knot_reader_session=${token}`,
+      ),
+      "demo",
+      "guide",
+    );
+    expect(response.status).toBe(200);
+    expect(resolvePage).toHaveBeenLastCalledWith({
+      siteSlug: "demo",
+      publicationSlug: "guide",
+      sessionDigest:
+        "be174c48b342abe96669d10364763aafb981f31ad57b64134094d1ace737fb66",
+    });
+  });
+
+  it("serves a site only through its verified custom-domain mapping", async () => {
+    const deps = dependencies({
+      resolveCustomDomainSite: vi.fn(async (hostname) =>
+        hostname === "notes.example.org"
+          ? { siteSlug: "demo", readerAccess: "public" as const }
+          : undefined,
+      ),
+    });
+    const handler = createPublicReaderHandlers({ ...deps, environment });
+    const response = await handler.customPage(
+      request("https://notes.example.org/guide"),
+      "guide",
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      'rel="canonical" href="https://notes.example.org/guide"',
+    );
+    expect(deps.repository.resolveCustomDomainSite).toHaveBeenCalledWith(
+      "notes.example.org",
+    );
   });
 
   it("rechecks active-version membership after the private object read", async () => {

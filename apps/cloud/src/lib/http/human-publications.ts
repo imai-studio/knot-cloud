@@ -123,6 +123,7 @@ export function createHumanPublicationHandlers(input: {
           publicationControlResultSchema.parse(
             await input.service.control({
               tenantId: authorized.workspace.tenantId,
+              userId: authorized.workspace.userId,
               operation,
             }),
           ),
@@ -254,6 +255,14 @@ function humanPublicationProblem(request: Request, error: unknown): Response {
       status: 404,
       code: "not-found",
       title: "The publication resource was not found",
+    });
+  }
+  if (code === "P0001") {
+    return problemResponse({
+      request,
+      status: 429,
+      code: "quota-exceeded",
+      title: "This workspace has reached its configured limit",
     });
   }
   if (["22000", "23505", "55000"].includes(code ?? "")) {
