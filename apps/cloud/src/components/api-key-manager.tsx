@@ -5,8 +5,14 @@ import type {
   ScopeName,
 } from "@imai/knot-cloud-contract";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
+import {
+  availableScopesForConnectors,
+  pruneConnectorSelection,
+  pruneScopeSelection,
+  type ApiKeyConnectorOption,
+} from "@/components/api-key-selection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,14 +29,37 @@ const commonScopes: ScopeName[] = [
 ];
 
 export function ApiKeyManager({
+  connectors,
   initialKeys,
 }: {
+  connectors: ApiKeyConnectorOption[];
   initialKeys: ConsumerApiKeyMetadata[];
 }) {
   const [keys, setKeys] = useState(initialKeys);
   const [secret, setSecret] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [selectedConnectorIds, setSelectedConnectorIds] = useState<string[]>(
+    [],
+  );
+  const [selectedScopes, setSelectedScopes] = useState<ScopeName[]>([]);
+  const usableConnectorIds = useMemo(
+    () => pruneConnectorSelection(connectors, selectedConnectorIds),
+    [connectors, selectedConnectorIds],
+  );
+  const availableScopes = useMemo(
+    () =>
+      availableScopesForConnectors(
+        connectors,
+        usableConnectorIds,
+        commonScopes,
+      ),
+    [connectors, usableConnectorIds],
+  );
+  const usableScopes = useMemo(
+    () => pruneScopeSelection(selectedScopes, availableScopes),
+    [availableScopes, selectedScopes],
+  );
 
   async function refresh() {
     const response = await fetch("/api/v1/session/api-keys", {
@@ -44,17 +73,27 @@ export function ApiKeyManager({
     setError(undefined);
     setSecret(undefined);
     try {
-      const scopes = formData.getAll("scopes");
+      const scopes = usableScopes;
+      const connectorIds = usableConnectorIds;
+      if (connectorIds.length === 0) {
+        throw new Error("Select at least one active connector.");
+      }
+      if (scopes.length === 0) {
+        throw new Error("Select at least one allowed operation.");
+      }
+      const expiryDays = Number(formData.get("expiryDays"));
+      const expiresAt =
+        Number.isFinite(expiryDays) && expiryDays > 0
+          ? Math.floor(Date.now() / 1_000) + expiryDays * 24 * 60 * 60
+          : undefined;
       const response = await fetch("/api/v1/session/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: formData.get("name"),
-          connectorIds: String(formData.get("connectorIds"))
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
+          connectorIds,
           scopes,
+          ...(expiresAt ? { expiresAt } : {}),
           requestsPerMinute: Number(formData.get("requestsPerMinute")),
           requestsPerDay: Number(formData.get("requestsPerDay")),
         }),
@@ -166,13 +205,21 @@ export function ApiKeyManager({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="connector-ids">Connector IDs</Label>
-            <Input
-              id="connector-ids"
-              name="connectorIds"
-              placeholder="UUID, UUID"
-              required
-            />
+            <Label htmlFor="key-expiry">Expires</Label>
+            <select
+              id="key-expiry"
+              name="expiryDays"
+              defaultValue="90"
+              className="h-10 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <option value="30">In 30 days</option>
+              <option value="90">In 90 days</option>
+              <option value="365">In 1 year</option>
+              <option value="0">No automatic expiry</option>
+            </select>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Prefer a short expiry. You can rotate or revoke the key sooner.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="per-minute">Requests per minute</Label>
@@ -198,17 +245,92 @@ export function ApiKeyManager({
           </div>
         </div>
         <fieldset className="mt-6">
+          <legend className="text-sm font-medium">Allowed connectors</legend>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            The key can submit work only to the connectors selected here. Their
+            own scopes and local policy still apply.
+          </p>
+          {connectors.filter((connector) => !connector.revokedAt).length ===
+          0 ? (
+            <p className="mt-3 border-y py-4 text-sm text-muted-foreground">
+              Pair an active connector before creating an API key.
+            </p>
+          ) : (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {connectors
+                .filter((connector) => !connector.revokedAt)
+                .map((connector) => (
+                  <label
+                    key={connector.id}
+                    className="flex min-h-11 items-start gap-3 rounded-lg border px-3 py-2.5 text-sm"
+                  >
+                    <input
+                      className="mt-0.5 size-4"
+                      checked={usableConnectorIds.includes(connector.id)}
+                      type="checkbox"
+                      name="connectorIds"
+                      value={connector.id}
+                      onChange={(event) => {
+                        const nextConnectorIds = event.target.checked
+                          ? [...new Set([...usableConnectorIds, connector.id])]
+                          : usableConnectorIds.filter(
+                              (id) => id !== connector.id,
+                            );
+                        setSelectedConnectorIds(nextConnectorIds);
+                        setSelectedScopes((current) =>
+                          pruneScopeSelection(
+                            current,
+                            availableScopesForConnectors(
+                              connectors,
+                              nextConnectorIds,
+                              commonScopes,
+                            ),
+                          ),
+                        );
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium">
+                        {connector.name}
+                      </span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {connector.scopes.length} granted scope
+                        {connector.scopes.length === 1 ? "" : "s"}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+            </div>
+          )}
+        </fieldset>
+        <fieldset className="mt-6">
           <legend className="text-sm font-medium">Allowed operations</legend>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             {commonScopes.map((scope) => (
-              <label key={scope} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="scopes" value={scope} />
-                <span>{scope}</span>
-              </label>
+              <ScopeChoice
+                checked={usableScopes.includes(scope)}
+                key={scope}
+                scope={scope}
+                available={availableScopes.includes(scope)}
+                onCheckedChange={(checked) =>
+                  setSelectedScopes(() =>
+                    checked
+                      ? [...new Set([...usableScopes, scope])]
+                      : usableScopes.filter((selected) => selected !== scope),
+                  )
+                }
+              />
             ))}
           </div>
         </fieldset>
-        <Button className="mt-6" type="submit" disabled={busy}>
+        <Button
+          className="mt-6"
+          type="submit"
+          disabled={
+            busy ||
+            connectors.every((connector) => Boolean(connector.revokedAt))
+          }
+        >
           <Plus className="size-4" />
           Create API key
         </Button>
@@ -233,7 +355,9 @@ export function ApiKeyManager({
                       {key.keyId} · {key.connectorIds.length} connector(s)
                     </p>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      {key.revokedAt ? "Revoked" : key.scopes.join(", ")}
+                      {key.revokedAt
+                        ? "Revoked"
+                        : `${expiryLabel(key.expiresAt)} · ${key.scopes.join(", ")}`}
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -241,7 +365,7 @@ export function ApiKeyManager({
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={busy || Boolean(key.revokedAt)}
+                      disabled={busy || !isRotatable(key)}
                       onClick={() => rotate(key.id)}
                     >
                       <RefreshCw className="size-4" /> Rotate
@@ -263,5 +387,50 @@ export function ApiKeyManager({
         )}
       </section>
     </div>
+  );
+}
+
+function expiryLabel(value: number | null) {
+  if (value === null) return "No automatic expiry";
+  const date = new Date(value * 1_000);
+  return date.getTime() <= Date.now()
+    ? `Expired ${date.toLocaleDateString()}`
+    : `Expires ${date.toLocaleDateString()}`;
+}
+
+function isRotatable(key: ConsumerApiKeyMetadata) {
+  return (
+    key.revokedAt === null &&
+    (key.expiresAt === null || key.expiresAt * 1_000 > Date.now())
+  );
+}
+
+function ScopeChoice({
+  available,
+  checked,
+  onCheckedChange,
+  scope,
+}: {
+  available: boolean;
+  checked: boolean;
+  onCheckedChange(checked: boolean): void;
+  scope: ScopeName;
+}) {
+  return (
+    <label
+      className={`flex min-h-9 items-center gap-2 text-sm ${
+        available ? "" : "text-muted-foreground"
+      }`}
+    >
+      <input
+        checked={checked}
+        type="checkbox"
+        name="scopes"
+        value={scope}
+        disabled={!available}
+        onChange={(event) => onCheckedChange(event.target.checked)}
+      />
+      <span>{scope}</span>
+    </label>
   );
 }

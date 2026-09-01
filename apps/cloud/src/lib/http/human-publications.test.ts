@@ -67,6 +67,40 @@ describe("human publication HTTP service", () => {
     expect(repository.createSite).not.toHaveBeenCalled();
   });
 
+  it.each(["member", "billing-admin"])(
+    "denies %s site and publication mutations",
+    async (role) => {
+      vi.mocked(getAuthorizedWorkspace).mockResolvedValue({
+        ...authorized,
+        workspace: { ...authorized.workspace, role },
+      } as Awaited<ReturnType<typeof getAuthorizedWorkspace>>);
+      const repository = publicationRepository();
+      const control = vi.fn();
+      const handlers = createHumanPublicationHandlers({
+        repository,
+        service: { control },
+      });
+
+      const create = await handlers.createSite(
+        jsonRequest("/api/v1/session/sites", {
+          name: "Notes",
+          slug: "notes",
+        }),
+      );
+      const mutate = await handlers.control(
+        jsonRequest(`/api/v1/session/publications/${publicationId}/control`, {
+          type: "publication.disable",
+        }),
+        publicationId,
+      );
+
+      expect(create.status).toBe(403);
+      expect(mutate.status).toBe(403);
+      expect(repository.createSite).not.toHaveBeenCalled();
+      expect(control).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns conflict only for a known site uniqueness violation", async () => {
     const repository = publicationRepository({
       createSite: vi
@@ -140,6 +174,38 @@ describe("human publication HTTP service", () => {
     expect(body.code).toBe("internal-error");
     expect(body.retryable).toBe(true);
   });
+
+  it("lists bounded publication version metadata for the active tenant", async () => {
+    const listPublicationVersions = vi.fn().mockResolvedValue([
+      {
+        id: "00000000-0000-4000-8000-000000000041",
+        state: "ready",
+        schemaVersion: "1.0",
+        contentSha256: "a".repeat(64),
+        connectorId: "00000000-0000-4000-8000-000000000051",
+        createdAt: new Date("2026-09-02T12:00:00.000Z"),
+        committedAt: new Date("2026-09-02T12:01:00.000Z"),
+      },
+    ]);
+    const handlers = createHumanPublicationHandlers({
+      repository: publicationRepository({ listPublicationVersions }),
+      service: { control: vi.fn() },
+    });
+    const response = await handlers.listPublicationVersions(
+      new Request(
+        `https://knot.test/api/v1/session/publications/${publicationId}/versions`,
+      ),
+      publicationId,
+    );
+    expect(response.status).toBe(200);
+    expect(listPublicationVersions).toHaveBeenCalledWith({
+      tenantId,
+      publicationId,
+    });
+    await expect(response.json()).resolves.toMatchObject([
+      { state: "ready", createdAt: "2026-09-02T12:00:00.000Z" },
+    ]);
+  });
 });
 
 function publicationRepository(
@@ -149,6 +215,7 @@ function publicationRepository(
     listSites: vi.fn().mockResolvedValue([]),
     createSite: vi.fn(),
     listPublications: vi.fn().mockResolvedValue([]),
+    listPublicationVersions: vi.fn().mockResolvedValue([]),
     prepareAssetUpload: vi.fn(),
     commitAssetUpload: vi.fn(),
     preparePublicationVersion: vi.fn(),

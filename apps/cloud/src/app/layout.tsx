@@ -18,6 +18,10 @@ export const metadata: Metadata = {
   },
   description:
     "A secure control and publishing plane for local agents connected to Anytype.",
+  icons: {
+    icon: [{ url: "/brand/knot-flower.png", type: "image/png" }],
+    apple: [{ url: "/brand/knot-flower.png", type: "image/png" }],
+  },
   openGraph: {
     title: "Knot",
     description:
