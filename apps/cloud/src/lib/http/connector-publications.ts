@@ -11,7 +11,7 @@ import { ZodError, type ZodType } from "zod";
 
 import { NeonConnectorRepository } from "@/lib/adapters/neon-connectors";
 import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
-import { ObjectSizeError } from "@/lib/adapters/r2";
+import { ObjectDigestMismatchError, ObjectSizeError } from "@/lib/adapters/r2";
 import { UpstashReplayNonceStore } from "@/lib/adapters/upstash-replay";
 import { createObjectStore } from "@/lib/adapters/factory";
 import { getSigningAuthorities } from "@/lib/env";
@@ -195,6 +195,14 @@ export function createConnectorPublicationHandlers(
 }
 
 function publicationProblem(request: Request, error: unknown): Response {
+  if (error instanceof ObjectDigestMismatchError) {
+    return problemResponse({
+      request,
+      status: 409,
+      code: "digest-mismatch",
+      title: "The uploaded object does not match its declared digest",
+    });
+  }
   if (error instanceof ObjectSizeError) {
     return problemResponse({
       request,

@@ -4,7 +4,7 @@ import {
 } from "@imai/knot-cloud-contract";
 import { describe, expect, it, vi } from "vitest";
 
-import { ObjectSizeError } from "@/lib/adapters/r2";
+import { ObjectDigestMismatchError, ObjectSizeError } from "@/lib/adapters/r2";
 import { ConnectorAuthenticationError } from "@/lib/security/connector-auth";
 
 import { createConnectorPublicationHandlers } from "./connector-publications";
@@ -193,6 +193,30 @@ describe("connector publication HTTP service", () => {
 
     expect(response.status).toBe(413);
     expect(body.code).toBe("payload-too-large");
+    expect(body.retryable).toBe(false);
+  });
+
+  it("maps object digest failures to a terminal conflict", async () => {
+    const service = handlers();
+    service.service.commitAssetUpload.mockRejectedValue(
+      new ObjectDigestMismatchError(),
+    );
+
+    const response = await service.handlers.commitAsset(
+      request(`/api/v1/connectors/${connectorId}/assets/commit`, {
+        protocolVersion: "1.0",
+        uploadId,
+        assetId,
+        expectedSha256: "a".repeat(64),
+        expectedByteSize: 100,
+        idempotencyKey: "asset-commit-0001",
+      }),
+      connectorId,
+    );
+    const body = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(409);
+    expect(body.code).toBe("digest-mismatch");
     expect(body.retryable).toBe(false);
   });
 
