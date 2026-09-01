@@ -1,0 +1,232 @@
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { PGlite } from "@electric-sql/pglite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+const tenantA = "00000000-0000-4000-8000-000000000001";
+const tenantB = "00000000-0000-4000-8000-000000000002";
+const connectorA = "00000000-0000-4000-8000-000000000011";
+const connectorB = "00000000-0000-4000-8000-000000000012";
+const apiKeyA = "00000000-0000-4000-8000-000000000021";
+
+describe("P0 database isolation", () => {
+  let database: PGlite;
+
+  beforeEach(async () => {
+    database = new PGlite();
+    await database.exec(`
+      CREATE ROLE knot_migrator LOGIN CREATEROLE NOSUPERUSER NOBYPASSRLS;
+      GRANT CREATE ON DATABASE postgres TO knot_migrator;
+      ALTER SCHEMA public OWNER TO knot_migrator;
+      GRANT knot_migrator TO CURRENT_USER;
+      SET ROLE knot_migrator;
+    `);
+    await database.exec(`
+      CREATE TABLE schema_migrations (
+        name text PRIMARY KEY,
+        sha256 text NOT NULL,
+        applied_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    const migrationDirectory = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "migrations",
+    );
+    const migrationFiles = (await readdir(migrationDirectory))
+      .filter((name) => /^\d+.*\.sql$/u.test(name))
+      .sort();
+    for (const migrationFile of migrationFiles) {
+      await database.exec(
+        await readFile(path.join(migrationDirectory, migrationFile), "utf8"),
+      );
+    }
+    await database.exec("RESET ROLE");
+    await database.exec(`
+      INSERT INTO tenants (id, name) VALUES
+        ('${tenantA}', 'Tenant A'),
+        ('${tenantB}', 'Tenant B');
+      INSERT INTO connectors (
+        id, tenant_id, name, protocol_version, public_key, scopes
+      ) VALUES
+        ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'), '{}'),
+        ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'), '{}');
+      INSERT INTO api_keys (
+        id, tenant_id, name, key_id, key_digest, scopes
+      ) VALUES (
+        '${apiKeyA}', '${tenantA}', 'A key', 'abcdefghijklmnop', repeat('0', 64), '{}'
+      );
+    `);
+  });
+
+  afterEach(async () => {
+    await database.close();
+  });
+
+  it("fails closed without a tenant and reveals only the selected tenant", async () => {
+    await database.exec("SET ROLE knot_app");
+    const withoutTenant = await database.query<{ id: string }>(
+      "SELECT id FROM tenants",
+    );
+    expect(withoutTenant.rows).toEqual([]);
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantA,
+    ]);
+    const result = await database.query<{ id: string }>(
+      "SELECT id FROM tenants ORDER BY id",
+    );
+    expect(result.rows).toEqual([{ id: tenantA }]);
+  });
+
+  it("rejects cross-tenant references and runtime DDL", async () => {
+    await database.exec("SET ROLE knot_app");
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantA,
+    ]);
+    await expect(
+      database.query(
+        `INSERT INTO api_key_connectors (tenant_id, api_key_id, connector_id)
+         VALUES ($1, $2, $3)`,
+        [tenantA, apiKeyA, connectorB],
+      ),
+    ).rejects.toMatchObject({ code: "23503" });
+    await expect(
+      database.exec("ALTER TABLE connectors DISABLE ROW LEVEL SECURITY"),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("resolves credentials without exposing tenant tables", async () => {
+    await database.exec("SET ROLE knot_app");
+    const plain = await database.query<{ id: string }>(
+      "SELECT id FROM connectors WHERE id = $1",
+      [connectorA],
+    );
+    expect(plain.rows).toEqual([]);
+    const resolved = await database.query<{ id: string; tenant_id: string }>(
+      "SELECT id, tenant_id FROM resolve_connector($1)",
+      [connectorA],
+    );
+    expect(resolved.rows).toEqual([{ id: connectorA, tenant_id: tenantA }]);
+    const apiKey = await database.query<{ id: string; tenant_id: string }>(
+      "SELECT id, tenant_id FROM resolve_api_key($1)",
+      ["abcdefghijklmnop"],
+    );
+    expect(apiKey.rows).toEqual([{ id: apiKeyA, tenant_id: tenantA }]);
+  });
+
+  it("keeps the migration ledger private and permits cleanup after unpublish", async () => {
+    const runtimeRole = await database.query<{
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+      rolcreatedb: boolean;
+      rolcreaterole: boolean;
+      rolinherit: boolean;
+      has_membership: boolean;
+    }>(
+      `SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit,
+              EXISTS (SELECT 1 FROM pg_auth_members WHERE member = pg_roles.oid)
+                AS has_membership
+       FROM pg_roles WHERE rolname = 'knot_app'`,
+    );
+    expect(runtimeRole.rows).toEqual([
+      {
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreatedb: false,
+        rolcreaterole: false,
+        rolinherit: false,
+        has_membership: false,
+      },
+    ]);
+
+    const privileges = await database.query<{ can_read: boolean }>(
+      "SELECT has_table_privilege('knot_app', 'schema_migrations', 'SELECT') AS can_read",
+    );
+    expect(privileges.rows).toEqual([{ can_read: false }]);
+
+    const site = "00000000-0000-4000-8000-000000000031";
+    const publication = "00000000-0000-4000-8000-000000000041";
+    await database.exec(`
+      INSERT INTO sites (id, tenant_id, name, slug)
+      VALUES ('${site}', '${tenantA}', 'Site A', 'tenant-a');
+      INSERT INTO publications (id, tenant_id, site_id, slug, unpublished_at)
+      VALUES ('${publication}', '${tenantA}', '${site}', 'page', now());
+      INSERT INTO deletion_outbox (tenant_id, publication_id, pathname)
+      VALUES ('${tenantA}', '${publication}', 'bundles/page-1');
+      DELETE FROM publications WHERE id = '${publication}';
+      UPDATE deletion_outbox SET completed_at = now()
+      WHERE tenant_id = '${tenantA}' AND pathname = 'bundles/page-1';
+      INSERT INTO deletion_outbox (tenant_id, pathname)
+      VALUES ('${tenantA}', 'bundles/page-1');
+    `);
+    const outbox = await database.query<{ publication_id: string | null }>(
+      "SELECT publication_id FROM deletion_outbox ORDER BY created_at",
+    );
+    expect(outbox.rows).toEqual([
+      { publication_id: null },
+      { publication_id: null },
+    ]);
+  });
+
+  it("does not grant the runtime role access to future tables", async () => {
+    await database.exec(`
+      SET ROLE knot_migrator;
+      CREATE TABLE future_private_table (id uuid PRIMARY KEY);
+      RESET ROLE;
+      SET ROLE knot_app;
+    `);
+    await expect(
+      database.query("SELECT id FROM future_private_table"),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("limits the runtime role to data access in the auth schema", async () => {
+    await database.exec("SET ROLE knot_app");
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        'auth-user-1', 'Raj', 'raj@example.test', true, now(), now()
+      )
+    `);
+    const result = await database.query<{ email: string }>(
+      `SELECT email FROM auth."user" WHERE id = 'auth-user-1'`,
+    );
+    expect(result.rows).toEqual([{ email: "raj@example.test" }]);
+    await database.exec(`
+      INSERT INTO auth."rateLimit" (id, key, count, "lastRequest")
+      VALUES ('test-rate-limit', '127.0.0.1:/sign-in/magic-link', 1, 1)
+    `);
+    await expect(
+      database.exec("CREATE TABLE auth.runtime_escape (id text)"),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
+  it("allows an asset key to be recreated only after the old row is deleted", async () => {
+    const digest = "1".repeat(64);
+    await database.exec(`
+      INSERT INTO assets (
+        tenant_id, sha256, pathname, content_type, byte_size, deleted_at
+      ) VALUES (
+        '${tenantA}', '${digest}', 'assets/reusable', 'image/png', 1, now()
+      );
+      INSERT INTO assets (
+        tenant_id, sha256, pathname, content_type, byte_size
+      ) VALUES (
+        '${tenantA}', '${digest}', 'assets/reusable', 'image/png', 1
+      );
+    `);
+    await expect(
+      database.exec(`
+        INSERT INTO assets (
+          tenant_id, sha256, pathname, content_type, byte_size
+        ) VALUES (
+          '${tenantA}', '${digest}', 'assets/reusable', 'image/png', 1
+        )
+      `),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+});
