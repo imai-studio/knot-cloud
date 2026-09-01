@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import { Resend } from "resend";
 
 import { MagicLinkEmail } from "@/lib/auth-email";
+import { normalizeAuthEmail } from "@/lib/auth-identity";
 import {
   getCloudEnvironment,
   getEmailEnvironment,
@@ -27,6 +28,18 @@ export function getAuth() {
 export async function getAuthorizedSession(requestHeaders: Headers) {
   const session = await getAuth().api.getSession({ headers: requestHeaders });
   return session && isAllowedEmail(session.user.email) ? session : null;
+}
+
+export function isTrustedHumanMutationOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  let normalizedOrigin: string;
+  try {
+    normalizedOrigin = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  return getTrustedAuthOrigins().includes(normalizedOrigin);
 }
 
 function createAuth() {
@@ -51,6 +64,15 @@ function createAuth() {
     }),
     secret: cloud.AUTH_SECRET,
     trustedOrigins: getTrustedAuthOrigins(),
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => ({
+            data: { ...user, email: normalizeAuthEmail(user.email) },
+          }),
+        },
+      },
+    },
     session: {
       expiresIn: 60 * 60 * 24,
       updateAge: 60 * 60 * 6,

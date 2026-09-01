@@ -36,8 +36,8 @@ The application accesses R2 through the AWS S3 client. It does not use Vercel Bl
 adapter is specific to Cloudflare R2. A general S3-compatible adapter remains planned.
 
 Public reader pages need a separate registrable domain from the operator console. No domain has
-been selected, so public publishing remains blocked. `CONTENT_BASE_URL` is a configuration
-boundary, not an approved production content domain.
+been selected, so public publishing remains blocked. The reader origin will become a required
+setting only when that service is implemented.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for request paths and trust boundaries.
 
@@ -56,11 +56,14 @@ compatibility origin for the imai deployment.
 
 ## Configuration
 
-The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `KNOT_ALLOWED_EMAILS`, and
-`RESEND_API_KEY`. Set `AUTH_TRUSTED_ORIGINS` to a comma-separated list when the same deployment is
-served from additional domains. `KNOT_ALLOWED_EMAILS` is a comma-separated operator allowlist;
-removing an address revokes its dashboard access on the next request. Keep the Resend key
-sending-only and restrict it to the configured sender domain. Never commit any of these values.
+The console requires `AUTH_BASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `IDENTITY_DIGEST_PEPPER`,
+`KNOT_ALLOWED_EMAILS`, and `RESEND_API_KEY`. Set `AUTH_TRUSTED_ORIGINS` to a comma-separated list
+when the same deployment is served from additional domains. `KNOT_ALLOWED_EMAILS` is a
+comma-separated operator allowlist; removing an address revokes its dashboard access on the next
+request. Keep the Resend key sending-only and restrict it to the configured sender domain. Never
+commit any of these values. See
+[`docs/workspace-authorization.md`](docs/workspace-authorization.md) for the human session and tenant
+boundary.
 
 Apply migrations from a trusted checkout:
 
@@ -79,6 +82,8 @@ restricted `knot_app` role. See
 - [`docs/threat-model.md`](docs/threat-model.md): assets, trust boundaries, threats, and controls.
 - [`docs/database-provisioning.md`](docs/database-provisioning.md): migration and runtime database
   credentials.
+- [`docs/workspace-authorization.md`](docs/workspace-authorization.md): human sessions, workspace
+  bootstrap, and tenant selection.
 - [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
 - [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned

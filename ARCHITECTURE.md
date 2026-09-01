@@ -75,9 +75,9 @@ Untrusted reader pages need a registrable domain separate from the operator cons
 `imai.tech` or `imai.studio` is not enough if those registrable domains continue to host the control
 plane. The exact reader domain has not been chosen.
 
-`CONTENT_BASE_URL` marks the configuration boundary in code. It does not settle the production
-domain. Public publishing cannot ship until the domain is recorded, DNS and cookies are scoped, and
-the renderer passes its CSP and cross-origin browser tests.
+Public publishing cannot ship until the domain is recorded, DNS and cookies are scoped, and the
+renderer passes its CSP and cross-origin browser tests. The reader origin is not a required runtime
+setting before that service exists.
 
 ## Self-hosting boundary
 

@@ -10,6 +10,9 @@ const tenantB = "00000000-0000-4000-8000-000000000002";
 const connectorA = "00000000-0000-4000-8000-000000000011";
 const connectorB = "00000000-0000-4000-8000-000000000012";
 const apiKeyA = "00000000-0000-4000-8000-000000000021";
+const authUserA = "auth-user-workspace-a";
+const authSessionA = "auth-session-workspace-a";
+const authSessionB = "auth-session-workspace-b";
 
 describe("P0 database isolation", () => {
   let database: PGlite;
@@ -432,4 +435,355 @@ describe("P0 database isolation", () => {
       { attempt: 2, outcome: "succeeded" },
     ]);
   });
+
+  it("creates one default owner workspace for repeated first requests", async () => {
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES
+        ('${authSessionA}', now() + interval '1 hour', 'workspace-token-a', now(), now(), '${authUserA}'),
+        ('${authSessionB}', now() + interval '1 hour', 'workspace-token-b', now(), now(), '${authUserA}');
+      SET ROLE knot_app;
+    `);
+
+    const [first, repeated, secondSession] = await Promise.all([
+      resolveWorkspace(database, authSessionA),
+      resolveWorkspace(database, authSessionA),
+      resolveWorkspace(database, authSessionB),
+    ]);
+
+    expect(first.rows).toHaveLength(1);
+    expect(repeated.rows).toEqual(first.rows);
+    expect(secondSession.rows).toEqual(first.rows);
+    expect(first.rows[0]).toMatchObject({
+      member_role: "owner",
+      tenant_name: "Personal workspace",
+    });
+
+    await database.exec("RESET ROLE");
+    const counts = await database.query<{
+      projected_users: number;
+      owned_workspaces: number;
+      defaults: number;
+      selections: number;
+    }>(`
+      SELECT
+        (SELECT count(*)::int FROM users WHERE auth_user_id = '${authUserA}') AS projected_users,
+        (SELECT count(*)::int FROM tenant_members
+         WHERE user_id = '${first.rows[0]?.user_id}' AND role = 'owner') AS owned_workspaces,
+        (SELECT count(*)::int FROM tenant_members
+         WHERE user_id = '${first.rows[0]?.user_id}' AND is_default) AS defaults,
+        (SELECT count(*)::int FROM session_tenant_selections
+         WHERE auth_user_id = '${authUserA}') AS selections
+    `);
+    expect(counts.rows).toEqual([
+      {
+        projected_users: 1,
+        owned_workspaces: 1,
+        defaults: 1,
+        selections: 2,
+      },
+    ]);
+
+    const functionBody = await database.query<{ source: string }>(`
+      SELECT prosrc AS source FROM pg_proc
+      WHERE oid = 'resolve_or_bootstrap_workspace(text,text,text,smallint,text)'::regprocedure
+    `);
+    expect(functionBody.rows[0]?.source).toContain("pg_advisory_xact_lock");
+  });
+
+  it("binds workspace selection to the verified session and membership", async () => {
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES
+        ('${authSessionA}', now() + interval '1 hour', 'workspace-token-a', now(), now(), '${authUserA}'),
+        ('${authSessionB}', now() + interval '1 hour', 'workspace-token-b', now(), now(), '${authUserA}');
+      SET ROLE knot_app;
+    `);
+    const defaultWorkspace = await resolveWorkspace(database, authSessionA);
+    await resolveWorkspace(database, authSessionB);
+    const projectedUserId = defaultWorkspace.rows[0]?.user_id;
+
+    await database.exec(`
+      RESET ROLE;
+      INSERT INTO tenant_members (tenant_id, user_id, role)
+      VALUES ('${tenantA}', '${projectedUserId}', 'member');
+      SET ROLE knot_app;
+    `);
+    const selected = await database.query<WorkspaceRow>(
+      `SELECT * FROM select_workspace_for_session($1, $2, $3)`,
+      [authSessionA, authUserA, tenantA],
+    );
+    expect(selected.rows).toEqual([
+      {
+        member_role: "member",
+        suspended_at: null,
+        tenant_id: tenantA,
+        tenant_name: "Tenant A",
+        user_id: projectedUserId,
+      },
+    ]);
+
+    const wrongUser = await database.query<WorkspaceRow>(
+      `SELECT * FROM select_workspace_for_session($1, $2, $3)`,
+      [authSessionA, "different-auth-user", tenantA],
+    );
+    expect(wrongUser.rows).toEqual([]);
+
+    await database.exec(`
+      RESET ROLE;
+      UPDATE auth."user" SET "emailVerified" = false WHERE id = '${authUserA}';
+      SET ROLE knot_app;
+    `);
+    const unverified = await database.query<WorkspaceRow>(
+      `SELECT * FROM select_workspace_for_session($1, $2, $3)`,
+      [authSessionA, authUserA, tenantA],
+    );
+    expect(unverified.rows).toEqual([]);
+
+    await database.exec("RESET ROLE");
+    const selections = await database.query<{
+      auth_session_id: string;
+      tenant_id: string;
+    }>(`
+      SELECT auth_session_id, tenant_id
+      FROM session_tenant_selections
+      WHERE auth_user_id = '${authUserA}'
+      ORDER BY auth_session_id
+    `);
+    expect(selections.rows).toEqual([
+      { auth_session_id: authSessionA, tenant_id: tenantA },
+      {
+        auth_session_id: authSessionB,
+        tenant_id: defaultWorkspace.rows[0]?.tenant_id,
+      },
+    ]);
+  });
+
+  it("promotes an existing membership to the default workspace", async () => {
+    const projectedUser = "00000000-0000-4000-8000-000000000072";
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES (
+        '${authSessionA}', now() + interval '1 hour', 'workspace-token-a',
+        now(), now(), '${authUserA}'
+      );
+      INSERT INTO users (
+        id, auth_user_id, email_digest, email_digest_version
+      ) VALUES (
+        '${projectedUser}', '${authUserA}', '${"2".repeat(64)}', 1
+      );
+      INSERT INTO tenant_members (tenant_id, user_id, role, is_default)
+      VALUES ('${tenantA}', '${projectedUser}', 'member', false);
+      SET ROLE knot_app;
+    `);
+
+    const workspace = await resolveWorkspace(database, authSessionA);
+    expect(workspace.rows).toEqual([
+      {
+        member_role: "member",
+        suspended_at: null,
+        tenant_id: tenantA,
+        tenant_name: "Tenant A",
+        user_id: projectedUser,
+      },
+    ]);
+
+    await database.exec("RESET ROLE");
+    const membership = await database.query<{ is_default: boolean }>(`
+      SELECT is_default FROM tenant_members
+      WHERE tenant_id = '${tenantA}' AND user_id = '${projectedUser}'
+    `);
+    expect(membership.rows).toEqual([{ is_default: true }]);
+  });
+
+  it("skips suspended selections and memberships during workspace resolution", async () => {
+    const projectedUser = "00000000-0000-4000-8000-000000000073";
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES (
+        '${authSessionA}', now() + interval '1 hour', 'workspace-token-a',
+        now(), now(), '${authUserA}'
+      );
+      INSERT INTO users (id, auth_user_id, email_digest, email_digest_version)
+      VALUES ('${projectedUser}', '${authUserA}', '${"2".repeat(64)}', 1);
+      UPDATE tenants SET suspended_at = now() WHERE id = '${tenantA}';
+      INSERT INTO tenant_members (tenant_id, user_id, role, is_default)
+      VALUES ('${tenantA}', '${projectedUser}', 'owner', true);
+      INSERT INTO session_tenant_selections (
+        auth_session_id, auth_user_id, user_id, tenant_id
+      ) VALUES (
+        '${authSessionA}', '${authUserA}', '${projectedUser}', '${tenantA}'
+      );
+      SET ROLE knot_app;
+    `);
+
+    const workspace = await resolveWorkspace(database, authSessionA);
+    expect(workspace.rows).toHaveLength(1);
+    expect(workspace.rows[0]).toMatchObject({
+      member_role: "owner",
+      suspended_at: null,
+      tenant_name: "Personal workspace",
+      user_id: projectedUser,
+    });
+    expect(workspace.rows[0]?.tenant_id).not.toBe(tenantA);
+  });
+
+  it("enforces case-insensitive uniqueness for Better Auth email addresses", async () => {
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        'auth-case-a', 'Case A', 'raj@example.test', true, now(), now()
+      )
+    `);
+    await expect(
+      database.exec(`
+        INSERT INTO auth."user" (
+          id, name, email, "emailVerified", "createdAt", "updatedAt"
+        ) VALUES (
+          'auth-case-b', 'Case B', 'RAJ@EXAMPLE.TEST', true, now(), now()
+        )
+      `),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("claims an existing keyed identity projection instead of creating a second user", async () => {
+    const projectedUser = "00000000-0000-4000-8000-000000000071";
+    await database.exec(`
+      INSERT INTO users (id, email_digest, email_digest_version)
+      VALUES ('${projectedUser}', '${"2".repeat(64)}', 1);
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES (
+        '${authSessionA}', now() + interval '1 hour', 'workspace-token-a',
+        now(), now(), '${authUserA}'
+      );
+      SET ROLE knot_app;
+    `);
+
+    const workspace = await resolveWorkspace(database, authSessionA, 7);
+    expect(workspace.rows[0]?.user_id).toBe(projectedUser);
+
+    await database.exec("RESET ROLE");
+    const projection = await database.query<{
+      auth_user_id: string;
+      claimed: boolean;
+      digest_version: number;
+      user_count: number;
+    }>(`
+      SELECT max(auth_user_id) AS auth_user_id,
+        bool_and(claimed_at IS NOT NULL) AS claimed,
+        max(email_digest_version)::int AS digest_version,
+        count(*)::int AS user_count
+      FROM users WHERE email_digest = '${"2".repeat(64)}'
+    `);
+    expect(projection.rows).toEqual([
+      {
+        auth_user_id: authUserA,
+        claimed: true,
+        digest_version: 7,
+        user_count: 1,
+      },
+    ]);
+    const audit = await database.query<{
+      actor_digest: string;
+      actor_digest_version: number;
+      count: number;
+    }>(`
+      SELECT max(actor_digest) AS actor_digest,
+        max(actor_digest_version)::int AS actor_digest_version,
+        count(*)::int AS count FROM audit_events
+      WHERE tenant_id = '${workspace.rows[0]?.tenant_id}'
+        AND action = 'identity.legacy-claim'
+        AND target_id = '${projectedUser}'
+        AND metadata = '{"digestVersion": 7}'::jsonb
+    `);
+    expect(audit.rows).toEqual([
+      {
+        actor_digest: "2".repeat(64),
+        actor_digest_version: 7,
+        count: 1,
+      },
+    ]);
+  });
+
+  it("removes the duplicate session authority and protects workspace projections", async () => {
+    const schema = await database.query<{
+      legacy_sessions: string | null;
+      legacy_resolver: string | null;
+      legacy_tenant_lookup: string | null;
+      app_reads_users: boolean;
+      app_reads_selections: boolean;
+      bootstrap_creates_schema_objects: boolean;
+      bootstrap_has_membership: boolean;
+    }>(`
+      SELECT
+        to_regclass('public.sessions')::text AS legacy_sessions,
+        to_regprocedure('resolve_session(text)')::text AS legacy_resolver,
+        to_regprocedure('tenant_ids_for_user(uuid)')::text AS legacy_tenant_lookup,
+        has_table_privilege('knot_app', 'users', 'SELECT') AS app_reads_users,
+        has_table_privilege('knot_app', 'session_tenant_selections', 'SELECT') AS app_reads_selections,
+        has_schema_privilege('knot_bootstrap', 'public', 'CREATE') AS bootstrap_creates_schema_objects,
+        EXISTS (
+          SELECT 1 FROM pg_auth_members
+          JOIN pg_roles ON pg_roles.oid = pg_auth_members.member
+          WHERE pg_roles.rolname = 'knot_bootstrap'
+        ) AS bootstrap_has_membership
+    `);
+    expect(schema.rows).toEqual([
+      {
+        app_reads_selections: false,
+        app_reads_users: false,
+        bootstrap_creates_schema_objects: false,
+        bootstrap_has_membership: false,
+        legacy_resolver: null,
+        legacy_sessions: null,
+        legacy_tenant_lookup: null,
+      },
+    ]);
+  });
 });
+
+interface WorkspaceRow {
+  user_id: string;
+  tenant_id: string;
+  tenant_name: string;
+  member_role: string;
+  suspended_at: string | null;
+}
+
+function resolveWorkspace(database: PGlite, sessionId: string, version = 1) {
+  return database.query<WorkspaceRow>(
+    `SELECT * FROM resolve_or_bootstrap_workspace($1, $2, $3, $4::smallint, $5)`,
+    [sessionId, authUserA, "2".repeat(64), version, "Personal workspace"],
+  );
+}
