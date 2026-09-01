@@ -679,7 +679,7 @@ describe("R2PrivateObjectStore", () => {
           tombstonedAt: new Date(),
         },
       ]),
-    ).rejects.toThrow(/canonical asset key/u);
+    ).rejects.toThrow(/belong to tenantId/u);
     expect(client.send).not.toHaveBeenCalled();
   });
 });

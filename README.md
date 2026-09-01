@@ -94,6 +94,8 @@ restricted `knot_app` role. See
   bootstrap, and tenant selection.
 - [`docs/deployment.md`](docs/deployment.md): deployment and provider preflight steps.
 - [`docs/object-storage.md`](docs/object-storage.md): private R2 keys, verification, and deletion.
+- [`docs/publication-lifecycle.md`](docs/publication-lifecycle.md): unreleased private publication
+  state, upload, rollback, and deletion behavior.
 - [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
 - [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned

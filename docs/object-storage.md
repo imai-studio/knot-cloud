@@ -3,8 +3,8 @@
 Knot Cloud uses one private Cloudflare R2 bucket through its S3-compatible API. The bucket stores
 immutable publication assets. It is not a public content origin.
 
-The storage port is implemented. No upload route, publication route, deletion worker, or public
-content hostname is released yet.
+The storage port and an unreleased publication lifecycle are implemented. No upload route,
+publication route, deletion worker trigger, or public content hostname is released yet.
 
 ## Configure R2
 
@@ -89,10 +89,9 @@ tombstoned objects and does not call R2 for either state. It checks visibility a
 read and discards the body if a tombstone committed while the read was in flight. This makes
 revocation independent of R2 availability and cache invalidation.
 
-`deleteTombstoned` accepts only typed tombstone records and verifies that every key is a canonical
-asset key for its tenant. It removes duplicate keys and respects R2's 1,000-object batch limit. A
-partial batch failure is an error so the durable outbox can retry it. The current repository does
-not contain that drainer yet.
+`deleteTombstoned` accepts only typed tombstone records and verifies that every asset or publication
+bundle key belongs to its tenant. It removes duplicate keys and respects R2's 1,000-object batch
+limit. A partial batch failure is an error, so the durable outbox retries it with a new lease.
 
 ## Public content domain gate
 

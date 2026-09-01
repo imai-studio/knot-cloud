@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1122.0",
+    "@aws-sdk/s3-request-presigner": "3.1122.0",
     "@base-ui/react": "^1.7.0",
     "@better-auth/kysely-adapter": "1.7.2",
     "@imai/knot-cloud-contract": "workspace:*",

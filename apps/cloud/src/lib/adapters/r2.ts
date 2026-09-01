@@ -8,12 +8,14 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { getR2Environment } from "@/lib/env";
 import {
   privateObjectCacheControl,
   type ObjectLocator,
   type ObjectStore,
+  type PublicationBundleLocator,
   type StoredObject,
   type StoredObjectDescriptor,
   type TombstonedObject,
@@ -56,6 +58,19 @@ export function objectKeyFor(locator: ObjectLocator): string {
   return `tenants/${locator.tenantId}/assets/${locator.sha256.slice(0, 2)}/${locator.sha256}`;
 }
 
+export function publicationBundleKeyFor(
+  locator: PublicationBundleLocator,
+): string {
+  validateLocator(locator);
+  if (!tenantIdPattern.test(locator.publicationId)) {
+    throw new TypeError("publicationId must be a canonical lowercase UUID");
+  }
+  if (!tenantIdPattern.test(locator.versionId)) {
+    throw new TypeError("versionId must be a canonical lowercase UUID");
+  }
+  return `tenants/${locator.tenantId}/publications/${locator.publicationId}/versions/${locator.versionId}/${locator.sha256}.json`;
+}
+
 function validateContentType(contentType: string): void {
   if (
     contentType.length === 0 ||
@@ -71,15 +86,23 @@ function validateTombstonedKey(object: TombstonedObject): string {
   if (!tenantIdPattern.test(object.tenantId)) {
     throw new TypeError("tenantId must be a canonical lowercase UUID");
   }
-  const match = object.key.match(
+  const assetMatch = object.key.match(
     /^tenants\/([0-9a-f-]{36})\/assets\/([a-f0-9]{2})\/([a-f0-9]{64})$/u,
   );
-  if (
-    !match ||
-    match[1] !== object.tenantId ||
-    match[2] !== match[3]?.slice(0, 2)
-  ) {
-    throw new TypeError("key must be a canonical asset key for tenantId");
+  if (assetMatch) {
+    if (
+      assetMatch[1] !== object.tenantId ||
+      assetMatch[2] !== assetMatch[3]?.slice(0, 2)
+    ) {
+      throw new TypeError("key must belong to tenantId");
+    }
+    return object.key;
+  }
+  const bundleMatch = object.key.match(
+    /^tenants\/([0-9a-f-]{36})\/publications\/([0-9a-f-]{36})\/versions\/([0-9a-f-]{36})\/([a-f0-9]{64})\.json$/u,
+  );
+  if (!bundleMatch || bundleMatch[1] !== object.tenantId) {
+    throw new TypeError("key must be a canonical tenant object key");
   }
   return object.key;
 }
@@ -248,13 +271,93 @@ export class R2PrivateObjectStore implements ObjectStore {
     }
   }
 
+  async createPresignedAssetUpload(input: {
+    locator: ObjectLocator;
+    contentLength: number;
+    contentType: string;
+    expiresInSeconds: number;
+  }): Promise<{
+    uploadUrl: string;
+    requiredHeaders: Record<string, string>;
+    expiresAt: Date;
+  }> {
+    const key = objectKeyFor(input.locator);
+    validateContentType(input.contentType);
+    if (
+      !Number.isSafeInteger(input.contentLength) ||
+      input.contentLength < 1 ||
+      input.contentLength > this.maxObjectBytes
+    ) {
+      throw new ObjectSizeError("asset exceeds the configured upload limit");
+    }
+    if (
+      !Number.isInteger(input.expiresInSeconds) ||
+      input.expiresInSeconds < 30 ||
+      input.expiresInSeconds > 900
+    ) {
+      throw new TypeError("expiresInSeconds must be between 30 and 900");
+    }
+    const command = new PutObjectCommand({
+      Bucket: this.#bucket,
+      Key: key,
+      ContentLength: input.contentLength,
+      ContentType: input.contentType,
+      CacheControl: privateObjectCacheControl,
+      IfNoneMatch: "*",
+      Metadata: {
+        "byte-size": String(input.contentLength),
+        kind: "asset",
+        sha256: input.locator.sha256,
+        "tenant-id": input.locator.tenantId,
+      },
+    });
+    const now = Date.now();
+    return {
+      uploadUrl: await getSignedUrl(this.#client, command, {
+        expiresIn: input.expiresInSeconds,
+      }),
+      requiredHeaders: {
+        "content-type": input.contentType,
+        "if-none-match": "*",
+      },
+      expiresAt: new Date(now + input.expiresInSeconds * 1_000),
+    };
+  }
+
   async putImmutable(input: {
     locator: ObjectLocator;
     body: ReadableStream<Uint8Array> | Uint8Array;
     contentLength?: number;
     contentType: string;
   }): Promise<StoredObjectDescriptor> {
-    const key = objectKeyFor(input.locator);
+    return this.#putAtKey({
+      ...input,
+      key: objectKeyFor(input.locator),
+      kind: "asset",
+    });
+  }
+
+  async putPublicationBundleImmutable(input: {
+    locator: PublicationBundleLocator;
+    body: ReadableStream<Uint8Array> | Uint8Array;
+    contentLength?: number;
+    contentType: "application/vnd.imai.knot.publication+json";
+  }): Promise<StoredObjectDescriptor> {
+    return this.#putAtKey({
+      ...input,
+      key: publicationBundleKeyFor(input.locator),
+      kind: "publication-bundle",
+    });
+  }
+
+  async #putAtKey(input: {
+    locator: ObjectLocator;
+    key: string;
+    kind: "asset" | "publication-bundle";
+    body: ReadableStream<Uint8Array> | Uint8Array;
+    contentLength?: number;
+    contentType: string;
+  }): Promise<StoredObjectDescriptor> {
     validateContentType(input.contentType);
     const body = await materializeBody({
       body: input.body,
@@ -270,7 +373,7 @@ export class R2PrivateObjectStore implements ObjectStore {
       const result = await this.#client.send(
         new PutObjectCommand({
           Bucket: this.#bucket,
-          Key: key,
+          Key: input.key,
           Body: body,
           ContentLength: body.byteLength,
           ContentMD5: digest(body, "md5").toString("base64"),
@@ -278,7 +381,7 @@ export class R2PrivateObjectStore implements ObjectStore {
           CacheControl: privateObjectCacheControl,
           Metadata: {
             "byte-size": String(body.byteLength),
-            kind: "asset",
+            kind: input.kind,
             sha256,
             "tenant-id": input.locator.tenantId,
           },
@@ -289,14 +392,14 @@ export class R2PrivateObjectStore implements ObjectStore {
     } catch (error) {
       if (!isPreconditionFailed(error)) throw error;
       const existing = await this.#client.send(
-        new HeadObjectCommand({ Bucket: this.#bucket, Key: key }),
+        new HeadObjectCommand({ Bucket: this.#bucket, Key: input.key }),
       );
       const storedSize = parseStoredSize(existing.Metadata);
       verifySinglePartEtag(existing.ETag, body);
       if (
         existing.Metadata?.sha256 !== sha256 ||
         existing.Metadata?.["tenant-id"] !== input.locator.tenantId ||
-        existing.Metadata?.kind !== "asset" ||
+        existing.Metadata?.kind !== input.kind ||
         existing.ContentLength !== storedSize ||
         storedSize !== body.byteLength ||
         existing.ContentType !== input.contentType
@@ -309,7 +412,7 @@ export class R2PrivateObjectStore implements ObjectStore {
 
     return {
       ...input.locator,
-      key,
+      key: input.key,
       contentType: input.contentType,
       size: body.byteLength,
     };

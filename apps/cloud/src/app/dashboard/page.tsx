@@ -16,9 +16,15 @@ import { redirect } from "next/navigation";
 import { AccountMenu } from "@/components/account-menu";
 import { Brand } from "@/components/brand";
 import { ConnectorsPanel } from "@/components/connectors-panel";
+import {
+  SitesPanel,
+  type Publication,
+  type Site,
+} from "@/components/sites-panel";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { getAuthorizedSession } from "@/lib/auth";
+import { NeonPublicationRepository } from "@/lib/adapters/neon-publications";
 import { cn } from "@/lib/utils";
 import { NeonPairingRepository } from "@/lib/adapters/neon-pairing";
 import { canManageConnectors } from "@/lib/pairing";
@@ -123,6 +129,19 @@ export default async function DashboardPage({
     view === "connectors"
       ? await loadConnectorData(authorized.workspace.tenantId, manageConnectors)
       : null;
+  let initialSites: Site[] = [];
+  let initialPublications: Publication[] = [];
+  if (view === "sites") {
+    const repository = new NeonPublicationRepository();
+    initialSites = await repository.listSites(authorized.workspace.tenantId);
+    const firstSite = initialSites[0];
+    if (firstSite) {
+      initialPublications = await repository.listPublications({
+        tenantId: authorized.workspace.tenantId,
+        siteId: firstSite.id,
+      });
+    }
+  }
 
   return (
     <div className="min-h-screen bg-muted/35 lg:grid lg:grid-cols-[240px_1fr]">
@@ -193,9 +212,8 @@ export default async function DashboardPage({
         </nav>
 
         <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
-          {view === "overview" ? (
-            <Overview />
-          ) : view === "connectors" ? (
+          {view === "overview" ? <Overview /> : null}
+          {view === "connectors" ? (
             connectorData ? (
               <ConnectorsPanel
                 canManage={manageConnectors}
@@ -204,9 +222,18 @@ export default async function DashboardPage({
                 sites={connectorData.sites}
               />
             ) : null
-          ) : (
+          ) : null}
+          {view === "sites" ? (
+            <SitesPanel
+              initialPublications={initialPublications}
+              initialSites={initialSites}
+            />
+          ) : null}
+          {view !== "overview" &&
+          view !== "connectors" &&
+          view !== "sites" ? (
             <SectionEmptyState view={view} />
-          )}
+          ) : null}
         </main>
       </div>
     </div>
