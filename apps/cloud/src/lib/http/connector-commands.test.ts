@@ -67,6 +67,8 @@ describe("connector command HTTP service", () => {
           },
         },
         createdByKind: "consumer-api-key",
+        actorDigest: "a".repeat(64),
+        actorDigestVersion: 1,
         createdAt: new Date("2026-09-01T00:00:00Z"),
         notBefore: new Date("2026-09-01T00:00:00Z"),
         expiresAt: new Date("2026-09-01T00:10:00Z"),
@@ -88,6 +90,11 @@ describe("connector command HTTP service", () => {
     const body = commandClaimResponseSchema.parse(await response.json());
     expect(body.commands).toHaveLength(1);
     expect(body.commands[0]?.commandId).toBe(commandId);
+    expect(body.commands[0]?.actor).toEqual({
+      principalDigest: "a".repeat(64),
+      digestVersion: 1,
+      provenance: "consumer-api-key",
+    });
     expect(claim).toHaveBeenCalledWith({
       tenantId,
       connectorId,
@@ -124,6 +131,8 @@ describe("connector command HTTP service", () => {
       requiredScope: "anytype.objects.read",
       payload: { domain: "anytype", operation: { type: "not-real" } },
       createdByKind: "consumer-api-key",
+      actorDigest: "a".repeat(64),
+      actorDigestVersion: 1,
       createdAt: new Date("2026-09-01T00:00:00Z"),
       notBefore: new Date("2026-09-01T00:00:00Z"),
       expiresAt: new Date("2026-09-01T00:10:00Z"),

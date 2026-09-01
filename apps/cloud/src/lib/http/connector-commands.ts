@@ -273,6 +273,14 @@ export function createConnectorCommandHandlers(
                   connectorId: connector.connectorId,
                   requiredScope: command.requiredScope,
                   createdBy: command.createdByKind,
+                  actor: {
+                    principalDigest: command.actorDigest,
+                    digestVersion: command.actorDigestVersion,
+                    provenance:
+                      command.createdByKind === "human-session"
+                        ? "authenticated-cloud-session"
+                        : command.createdByKind,
+                  },
                   createdAt: unixSeconds(command.createdAt),
                   notBefore: unixSeconds(command.notBefore),
                   expiresAt: unixSeconds(command.expiresAt),

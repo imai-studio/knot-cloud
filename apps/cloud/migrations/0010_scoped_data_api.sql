@@ -8,6 +8,13 @@ ALTER TABLE api_keys
   ADD CONSTRAINT api_keys_name_size CHECK (char_length(name) BETWEEN 1 AND 100),
   ADD CONSTRAINT api_keys_expiry_order CHECK (expires_at IS NULL OR expires_at > created_at);
 
+ALTER TABLE commands
+  ADD COLUMN actor_digest text CHECK (actor_digest ~ '^[a-f0-9]{64}$'),
+  ADD COLUMN actor_digest_version smallint CHECK (actor_digest_version > 0),
+  ADD CONSTRAINT commands_actor_digest_pair CHECK (
+    (actor_digest IS NULL) = (actor_digest_version IS NULL)
+  );
+
 CREATE TABLE api_key_usage_windows (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   api_key_id uuid NOT NULL,
@@ -347,12 +354,13 @@ BEGIN
 
   INSERT INTO commands (
     id, tenant_id, connector_id, required_scope, payload, not_before, expires_at,
-    idempotency_key, created_by_kind, created_by_id, created_at, updated_at
+    idempotency_key, created_by_kind, created_by_id, actor_digest,
+    actor_digest_version, created_at, updated_at
   ) VALUES (
     new_command_id, p_tenant_id, p_connector_id, p_required_scope,
     jsonb_build_object('domain', 'anytype', 'operation', p_operation),
     p_created_at, p_expires_at, p_idempotency_key, 'consumer-api-key', p_api_key_id,
-    p_created_at, p_created_at
+    p_actor_digest, p_actor_digest_version, p_created_at, p_created_at
   );
 
   INSERT INTO idempotency_records (

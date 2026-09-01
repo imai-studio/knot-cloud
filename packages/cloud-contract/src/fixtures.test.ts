@@ -212,6 +212,11 @@ describe("closed operation vocabulary", () => {
         connectorId: "connector-1",
         requiredScope: "anytype.objects.write",
         createdBy: "consumer-api-key",
+        actor: {
+          principalDigest: "a".repeat(64),
+          digestVersion: 1,
+          provenance: "consumer-api-key",
+        },
         createdAt: 1_788_192_000,
         notBefore: 1_788_192_000,
         expiresAt: 1_788_192_600,

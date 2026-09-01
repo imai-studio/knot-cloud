@@ -210,6 +210,11 @@ describe("typed remote operations", () => {
         connectorId: "connector-1",
         requiredScope: "anytype.objects.read",
         createdBy: "consumer-api-key",
+        actor: {
+          principalDigest: "a".repeat(64),
+          digestVersion: 1,
+          provenance: "consumer-api-key",
+        },
         createdAt: 1_788_192_000,
         notBefore: 1_788_192_000,
         expiresAt: 1_788_192_600,
@@ -225,6 +230,37 @@ describe("typed remote operations", () => {
         },
       }),
     ).toThrow();
+  });
+
+  it("binds authenticated actor provenance to the command creator", () => {
+    expect(() =>
+      commandEnvelopeSchema.parse({
+        protocolVersion,
+        commandId: "command-1",
+        connectorId: "connector-1",
+        requiredScope: "anytype.objects.read",
+        createdBy: "consumer-api-key",
+        actor: {
+          principalDigest: "a".repeat(64),
+          digestVersion: 1,
+          provenance: "authenticated-cloud-session",
+        },
+        createdAt: 1_788_192_000,
+        notBefore: 1_788_192_000,
+        expiresAt: 1_788_192_600,
+        attempt: 1,
+        leaseToken: "active-lease-token-0000000000000001",
+        leaseExpiresAt: 1_788_192_060,
+        payload: {
+          domain: "anytype",
+          operation: {
+            type: "object.read",
+            spaceId: "space-1",
+            objectId: "object-1",
+          },
+        },
+      }),
+    ).toThrow(/provenance must be consumer-api-key/u);
   });
 });
 
