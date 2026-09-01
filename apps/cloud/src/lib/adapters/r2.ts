@@ -25,6 +25,7 @@ const deleteBatchSize = 1_000;
 const maximumAssetBytes = 104_857_600;
 const defaultMaxObjectBytes = maximumAssetBytes;
 const hardMaxObjectBytes = maximumAssetBytes;
+export const r2RequestChecksumCalculation = "WHEN_REQUIRED" as const;
 const tenantIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -322,6 +323,9 @@ export class R2PrivateObjectStore implements ObjectStore {
       this.#client = new S3Client({
         region: "auto",
         endpoint: `https://${environment.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+        // R2 rejects a PutObject request that carries both our explicit
+        // Content-MD5 and the SDK's optional flexible checksum.
+        requestChecksumCalculation: r2RequestChecksumCalculation,
         credentials: {
           accessKeyId: environment.R2_ACCESS_KEY_ID,
           secretAccessKey: environment.R2_SECRET_ACCESS_KEY,

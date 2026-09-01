@@ -136,6 +136,9 @@ const key = `tenants/${tenantId}/assets/${sha256.slice(0, 2)}/${sha256}`;
 const r2 = new S3Client({
   region: "auto",
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  // Keep the smoke request identical to the runtime adapter: R2 accepts the
+  // explicit Content-MD5, but rejects an additional optional SDK checksum.
+  requestChecksumCalculation: "WHEN_REQUIRED",
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,

@@ -15,6 +15,7 @@ import {
   ObjectDigestMismatchError,
   ObjectSizeError,
   objectKeyFor,
+  r2RequestChecksumCalculation,
   R2PrivateObjectStore,
 } from "./r2";
 
@@ -50,6 +51,49 @@ async function consume(
 }
 
 describe("R2PrivateObjectStore", () => {
+  it("does not add a second checksum beside the explicit Content-MD5", async () => {
+    const contentMd5 = "kAFQmDzST7DWlj99KOF/cg==";
+    let serializedHeaders: Record<string, string> | undefined;
+    const client = new S3Client({
+      region: "auto",
+      endpoint: "https://test-account.r2.cloudflarestorage.com",
+      credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      requestChecksumCalculation: r2RequestChecksumCalculation,
+      requestHandler: {
+        handle: async (request: { headers: Record<string, string> }) => {
+          serializedHeaders = request.headers;
+          return {
+            response: {
+              statusCode: 200,
+              headers: { etag: '"900150983cd24fb0d6963f7d28e17f72"' },
+              body: new Uint8Array(),
+            },
+          };
+        },
+      },
+    });
+
+    await client.send(
+      new PutObjectCommand({
+        Bucket: "knot-test",
+        Key: "checksum-probe",
+        Body: new TextEncoder().encode("abc"),
+        ContentLength: 3,
+        ContentMD5: contentMd5,
+      }),
+    );
+
+    expect(serializedHeaders?.["content-md5"]).toBe(contentMd5);
+    expect(
+      Object.keys(serializedHeaders ?? {}).filter(
+        (header) =>
+          header === "content-md5" ||
+          header.startsWith("x-amz-checksum-") ||
+          header === "x-amz-sdk-checksum-algorithm",
+      ),
+    ).toEqual(["content-md5"]);
+  });
+
   it("returns every caller-controlled header required by a presigned upload", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const object = locator(bytes);
