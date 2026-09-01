@@ -104,6 +104,15 @@ Prerequisites: the local Knot workflow runner and the relevant released P3 or P4
 - Preserve native Anytype participant identity in every event and authorization decision.
 - Add retry, dead-letter, approval, and audit views backed by Postgres records.
 
+### P2b transactional event candidate
+
+The P2b branch implements the Cloud half of transactional channel events: tenant-isolated
+subscriptions to deployment-approved destination names, atomic event-and-delivery persistence,
+signed bounded envelopes, lease-fenced retries, idempotency, dead-lettering, and audit records. See
+[`transactional-events.md`](transactional-events.md). It deliberately stores only channel-origin
+pointers. Native Anytype sender verification and `chat.send` authorization remain local connector
+responsibilities and must use the existing P6 runner.
+
 ## P7. Later product work
 
 Prerequisite: security and recovery evidence from P2 through P6.
