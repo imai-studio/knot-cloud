@@ -41,9 +41,10 @@ The Vercel build runs a provider preflight against Neon and R2. It confirms that
 credential uses the restricted database role. It also completes a private R2 write, read, and delete
 round trip. No released request path stores a user publication in R2.
 
-## Planned connector and publication paths
+## Publication implementation candidate
 
-Planned releases add connector and publication paths. Both use Postgres as their source of truth.
+The repository contains an unreleased publication lifecycle. It depends on tenant bootstrap,
+connector pairing, signed requests, replay storage, and private R2. Postgres remains authoritative.
 
 ```mermaid
 flowchart LR
@@ -64,10 +65,12 @@ mutation proceeds. Postgres stores commands, attempts, leases, publication point
 and the deletion outbox. Queues and scheduled jobs may start work, but they cannot hold the only
 copy of authoritative state.
 
-Publication bytes will remain private in R2. The public renderer will read only the version named by
-the active Postgres publication pointer. Disable and unpublish will first change database state so
-every service-controlled reader and asset route returns 404. A deletion worker will then remove the
-R2 objects and record completion in the outbox.
+Publication bytes remain private in R2. Media uploads go directly to short-lived private R2 URLs so
+Vercel does not proxy large bodies. The service reads each object back and verifies its digest and
+length before it can appear in an active version. The candidate public renderer accepts only the
+typed document schema and reads media only when it belongs to the active Postgres version. Disable
+and unpublish first change database state so every reader and media route returns `404`. The
+deletion worker then removes the R2 objects and records completion in the outbox.
 
 ## Public-content domain gate
 
@@ -76,8 +79,8 @@ Untrusted reader pages need a registrable domain separate from the operator cons
 plane. The exact reader domain has not been chosen.
 
 Public publishing cannot ship until the domain is recorded, DNS and cookies are scoped, and the
-renderer passes its CSP and cross-origin browser tests. The reader origin is not a required runtime
-setting before that service exists.
+renderer passes its CSP and cross-origin browser tests. The candidate routes return `404` while
+`CONTENT_BASE_URL` is absent or does not match the request origin.
 
 ## Self-hosting boundary
 

@@ -5,6 +5,8 @@ import {
   type ProblemDetails,
 } from "@imai/knot-cloud-contract";
 
+import { getAppBaseUrl } from "@/lib/env";
+
 export class HttpProblem extends Error {
   constructor(
     readonly status: ProblemDetails["status"],
@@ -19,7 +21,8 @@ export class HttpProblem extends Error {
 }
 
 export function problemResponse(input: {
-  problemBaseUrl: string;
+  problemBaseUrl?: string;
+  request?: Request;
   status: ProblemDetails["status"];
   code: ProblemDetails["code"];
   title: string;
@@ -30,9 +33,12 @@ export function problemResponse(input: {
   logEvent?:
     "connector-command-internal-error" | "connector-provider-unavailable";
 }): Response {
+  // Never derive a problem namespace from the request Host. That value is
+  // controlled by the caller at the HTTP boundary.
+  const problemBaseUrl = input.problemBaseUrl ?? getAppBaseUrl();
   const requestId = randomBytes(16).toString("base64url");
   const body = problemDetailsSchema.parse({
-    type: new URL(`/problems/${input.code}`, input.problemBaseUrl).toString(),
+    type: new URL(`/problems/${input.code}`, problemBaseUrl).toString(),
     title: input.title,
     status: input.status,
     code: input.code,

@@ -8,20 +8,23 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { getR2Environment } from "@/lib/env";
 import {
   privateObjectCacheControl,
   type ObjectLocator,
   type ObjectStore,
+  type PublicationBundleLocator,
   type StoredObject,
   type StoredObjectDescriptor,
   type TombstonedObject,
 } from "@/lib/ports";
 
 const deleteBatchSize = 1_000;
-const defaultMaxObjectBytes = 33_554_432;
-const hardMaxObjectBytes = 134_217_728;
+const maximumAssetBytes = 104_857_600;
+const defaultMaxObjectBytes = maximumAssetBytes;
+const hardMaxObjectBytes = maximumAssetBytes;
 const tenantIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -56,6 +59,19 @@ export function objectKeyFor(locator: ObjectLocator): string {
   return `tenants/${locator.tenantId}/assets/${locator.sha256.slice(0, 2)}/${locator.sha256}`;
 }
 
+export function publicationBundleKeyFor(
+  locator: PublicationBundleLocator,
+): string {
+  validateLocator(locator);
+  if (!tenantIdPattern.test(locator.publicationId)) {
+    throw new TypeError("publicationId must be a canonical lowercase UUID");
+  }
+  if (!tenantIdPattern.test(locator.versionId)) {
+    throw new TypeError("versionId must be a canonical lowercase UUID");
+  }
+  return `tenants/${locator.tenantId}/publications/${locator.publicationId}/versions/${locator.versionId}/${locator.sha256}.json`;
+}
+
 function validateContentType(contentType: string): void {
   if (
     contentType.length === 0 ||
@@ -71,15 +87,23 @@ function validateTombstonedKey(object: TombstonedObject): string {
   if (!tenantIdPattern.test(object.tenantId)) {
     throw new TypeError("tenantId must be a canonical lowercase UUID");
   }
-  const match = object.key.match(
+  const assetMatch = object.key.match(
     /^tenants\/([0-9a-f-]{36})\/assets\/([a-f0-9]{2})\/([a-f0-9]{64})$/u,
   );
-  if (
-    !match ||
-    match[1] !== object.tenantId ||
-    match[2] !== match[3]?.slice(0, 2)
-  ) {
-    throw new TypeError("key must be a canonical asset key for tenantId");
+  if (assetMatch) {
+    if (
+      assetMatch[1] !== object.tenantId ||
+      assetMatch[2] !== assetMatch[3]?.slice(0, 2)
+    ) {
+      throw new TypeError("key must belong to tenantId");
+    }
+    return object.key;
+  }
+  const bundleMatch = object.key.match(
+    /^tenants\/([0-9a-f-]{36})\/publications\/([0-9a-f-]{36})\/versions\/([0-9a-f-]{36})\/([a-f0-9]{64})\.json$/u,
+  );
+  if (!bundleMatch || bundleMatch[1] !== object.tenantId) {
+    throw new TypeError("key must be a canonical tenant object key");
   }
   return object.key;
 }
@@ -181,12 +205,6 @@ function parseStoredSize(metadata: Record<string, string> | undefined): number {
   return size;
 }
 
-function parseStoredContentType(contentType: string | undefined): string {
-  if (contentType === undefined) return "application/octet-stream";
-  validateContentType(contentType);
-  return contentType;
-}
-
 function verifySinglePartEtag(
   etag: string | undefined,
   bytes: Uint8Array,
@@ -200,13 +218,87 @@ function verifySinglePartEtag(
   }
 }
 
-function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
+function boundedStoredStream(
+  source: ReadableStream<Uint8Array>,
+  expectedSize: number,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let observedSize = 0;
   return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          if (observedSize !== expectedSize) {
+            controller.error(
+              new ObjectSizeError(
+                "stored object length does not match its verified metadata",
+              ),
+            );
+          } else {
+            controller.close();
+          }
+          reader.releaseLock();
+          return;
+        }
+        observedSize += chunk.value.byteLength;
+        if (observedSize > expectedSize) {
+          await reader
+            .cancel("stored object exceeds its verified length")
+            .catch(() => {});
+          controller.error(
+            new ObjectSizeError(
+              "stored object length does not match its verified metadata",
+            ),
+          );
+          reader.releaseLock();
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        reader.releaseLock();
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
     },
   });
+}
+
+function validateStoredAssetMetadata(input: {
+  locator: ObjectLocator;
+  metadata?: Record<string, string>;
+  contentLength?: number;
+  contentType?: string;
+  maxObjectBytes: number;
+}): { contentType: string; size: number } {
+  const size = parseStoredSize(input.metadata);
+  const contentType = input.contentType ?? "application/octet-stream";
+  if (input.contentType !== undefined) validateContentType(input.contentType);
+  if (
+    input.metadata?.sha256 !== input.locator.sha256 ||
+    input.metadata?.["tenant-id"] !== input.locator.tenantId ||
+    input.metadata?.kind !== "asset"
+  ) {
+    throw new Error("stored object metadata does not match its key");
+  }
+  if (
+    size > input.maxObjectBytes ||
+    (input.contentLength !== undefined && input.contentLength !== size)
+  ) {
+    throw new ObjectSizeError(
+      "stored object length does not match its verified metadata",
+    );
+  }
+  return {
+    contentType,
+    size,
+  };
 }
 
 export class R2PrivateObjectStore implements ObjectStore {
@@ -248,13 +340,95 @@ export class R2PrivateObjectStore implements ObjectStore {
     }
   }
 
+  async createPresignedAssetUpload(input: {
+    locator: ObjectLocator;
+    contentLength: number;
+    contentType: string;
+    expiresInSeconds: number;
+  }): Promise<{
+    uploadUrl: string;
+    requiredHeaders: Record<string, string>;
+    expiresAt: Date;
+  }> {
+    const key = objectKeyFor(input.locator);
+    validateContentType(input.contentType);
+    if (
+      !Number.isSafeInteger(input.contentLength) ||
+      input.contentLength < 1 ||
+      input.contentLength > this.maxObjectBytes
+    ) {
+      throw new ObjectSizeError("asset exceeds the configured upload limit");
+    }
+    if (
+      !Number.isInteger(input.expiresInSeconds) ||
+      input.expiresInSeconds < 30 ||
+      input.expiresInSeconds > 900
+    ) {
+      throw new TypeError("expiresInSeconds must be between 30 and 900");
+    }
+    const command = new PutObjectCommand({
+      Bucket: this.#bucket,
+      Key: key,
+      ContentLength: input.contentLength,
+      ContentType: input.contentType,
+      CacheControl: privateObjectCacheControl,
+      IfNoneMatch: "*",
+      Metadata: {
+        "byte-size": String(input.contentLength),
+        kind: "asset",
+        sha256: input.locator.sha256,
+        "tenant-id": input.locator.tenantId,
+      },
+    });
+    const now = Date.now();
+    return {
+      uploadUrl: await getSignedUrl(this.#client, command, {
+        expiresIn: input.expiresInSeconds,
+      }),
+      requiredHeaders: {
+        "cache-control": privateObjectCacheControl,
+        "content-length": String(input.contentLength),
+        "content-type": input.contentType,
+        "if-none-match": "*",
+      },
+      expiresAt: new Date(now + input.expiresInSeconds * 1_000),
+    };
+  }
+
   async putImmutable(input: {
     locator: ObjectLocator;
     body: ReadableStream<Uint8Array> | Uint8Array;
     contentLength?: number;
     contentType: string;
   }): Promise<StoredObjectDescriptor> {
-    const key = objectKeyFor(input.locator);
+    return this.#putAtKey({
+      ...input,
+      key: objectKeyFor(input.locator),
+      kind: "asset",
+    });
+  }
+
+  async putPublicationBundleImmutable(input: {
+    locator: PublicationBundleLocator;
+    body: ReadableStream<Uint8Array> | Uint8Array;
+    contentLength?: number;
+    contentType: "application/vnd.imai.knot.publication+json";
+  }): Promise<StoredObjectDescriptor> {
+    return this.#putAtKey({
+      ...input,
+      key: publicationBundleKeyFor(input.locator),
+      kind: "publication-bundle",
+    });
+  }
+
+  async #putAtKey(input: {
+    locator: ObjectLocator;
+    key: string;
+    kind: "asset" | "publication-bundle";
+    body: ReadableStream<Uint8Array> | Uint8Array;
+    contentLength?: number;
+    contentType: string;
+  }): Promise<StoredObjectDescriptor> {
     validateContentType(input.contentType);
     const body = await materializeBody({
       body: input.body,
@@ -270,7 +444,7 @@ export class R2PrivateObjectStore implements ObjectStore {
       const result = await this.#client.send(
         new PutObjectCommand({
           Bucket: this.#bucket,
-          Key: key,
+          Key: input.key,
           Body: body,
           ContentLength: body.byteLength,
           ContentMD5: digest(body, "md5").toString("base64"),
@@ -278,7 +452,7 @@ export class R2PrivateObjectStore implements ObjectStore {
           CacheControl: privateObjectCacheControl,
           Metadata: {
             "byte-size": String(body.byteLength),
-            kind: "asset",
+            kind: input.kind,
             sha256,
             "tenant-id": input.locator.tenantId,
           },
@@ -289,14 +463,14 @@ export class R2PrivateObjectStore implements ObjectStore {
     } catch (error) {
       if (!isPreconditionFailed(error)) throw error;
       const existing = await this.#client.send(
-        new HeadObjectCommand({ Bucket: this.#bucket, Key: key }),
+        new HeadObjectCommand({ Bucket: this.#bucket, Key: input.key }),
       );
       const storedSize = parseStoredSize(existing.Metadata);
       verifySinglePartEtag(existing.ETag, body);
       if (
         existing.Metadata?.sha256 !== sha256 ||
         existing.Metadata?.["tenant-id"] !== input.locator.tenantId ||
-        existing.Metadata?.kind !== "asset" ||
+        existing.Metadata?.kind !== input.kind ||
         existing.ContentLength !== storedSize ||
         storedSize !== body.byteLength ||
         existing.ContentType !== input.contentType
@@ -309,7 +483,7 @@ export class R2PrivateObjectStore implements ObjectStore {
 
     return {
       ...input.locator,
-      key,
+      key: input.key,
       contentType: input.contentType,
       size: body.byteLength,
     };
@@ -331,26 +505,15 @@ export class R2PrivateObjectStore implements ObjectStore {
       }
 
       const source = result.Body.transformToWebStream();
-      let size: number;
-      let contentType: string;
+      let metadata: { contentType: string; size: number };
       try {
-        size = parseStoredSize(result.Metadata);
-        contentType = parseStoredContentType(result.ContentType);
-        if (
-          result.Metadata?.sha256 !== locator.sha256 ||
-          result.Metadata?.["tenant-id"] !== locator.tenantId ||
-          result.Metadata?.kind !== "asset"
-        ) {
-          throw new Error("stored object metadata does not match its key");
-        }
-        if (
-          size > this.maxObjectBytes ||
-          (result.ContentLength !== undefined && result.ContentLength !== size)
-        ) {
-          throw new ObjectSizeError(
-            "stored object length does not match its verified metadata",
-          );
-        }
+        metadata = validateStoredAssetMetadata({
+          locator,
+          metadata: result.Metadata,
+          contentLength: result.ContentLength,
+          contentType: result.ContentType,
+          maxObjectBytes: this.maxObjectBytes,
+        });
       } catch (error) {
         await source
           .cancel("stored object metadata is invalid")
@@ -358,26 +521,78 @@ export class R2PrivateObjectStore implements ObjectStore {
         throw error;
       }
 
-      const body = await materializeBody({
-        body: source,
-        contentLength: size,
-        maxObjectBytes: this.maxObjectBytes,
-      });
-      if (digest(body, "sha256").toString("hex") !== locator.sha256) {
-        throw new ObjectDigestMismatchError();
-      }
-
       const descriptor = {
         ...locator,
         key,
-        contentType,
-        size,
+        contentType: metadata.contentType,
+        size: metadata.size,
       };
       return {
         descriptor,
         cacheControl: privateObjectCacheControl,
-        stream: streamFromBytes(body),
+        // Direct uploads are fully hashed by verify() before they become
+        // publishable. Reads validate immutable key metadata and stream the
+        // object instead of buffering and hashing it again on every request.
+        stream: boundedStoredStream(source, metadata.size),
       };
+    } catch (error) {
+      if (isMissingObject(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async verify(
+    locator: ObjectLocator,
+  ): Promise<StoredObjectDescriptor | undefined> {
+    const key = objectKeyFor(locator);
+    try {
+      const result = await this.#client.send(
+        new GetObjectCommand({ Bucket: this.#bucket, Key: key }),
+      );
+      if (!result.Body) return undefined;
+      const source = result.Body.transformToWebStream();
+      let metadata: { contentType: string; size: number };
+      try {
+        metadata = validateStoredAssetMetadata({
+          locator,
+          metadata: result.Metadata,
+          contentLength: result.ContentLength,
+          contentType: result.ContentType,
+          maxObjectBytes: this.maxObjectBytes,
+        });
+      } catch (error) {
+        await source.cancel("stored object metadata is invalid");
+        throw error;
+      }
+
+      const hash = createHash("sha256");
+      const reader = source.getReader();
+      let observedSize = 0;
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          observedSize += chunk.value.byteLength;
+          if (observedSize > metadata.size) {
+            await reader.cancel("stored object exceeds its verified length");
+            throw new ObjectSizeError(
+              "stored object length does not match its verified metadata",
+            );
+          }
+          hash.update(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (observedSize !== metadata.size) {
+        throw new ObjectSizeError(
+          "stored object length does not match its verified metadata",
+        );
+      }
+      if (hash.digest("hex") !== locator.sha256) {
+        throw new ObjectDigestMismatchError();
+      }
+      return { ...locator, key, ...metadata };
     } catch (error) {
       if (isMissingObject(error)) return undefined;
       throw error;

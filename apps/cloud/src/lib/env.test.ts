@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseCloudEnvironment,
+  parseContentEnvironment,
   parseEmailEnvironment,
   parseR2Environment,
   parseUpstashEnvironment,
@@ -14,6 +15,7 @@ const required = {
   AUTH_BASE_URL: "https://app.knot.test",
   DATABASE_URL: "postgres://knot_app:secret@db.test/knot",
   AUTH_SECRET: "a".repeat(32),
+  CRON_SECRET: "c".repeat(32),
   API_KEY_PEPPER: "p".repeat(32),
   API_KEY_PEPPER_VERSION: "1",
   IDENTITY_DIGEST_PEPPER: "i".repeat(32),
@@ -61,6 +63,44 @@ describe("cloud environment", () => {
   });
 });
 
+describe("content environment", () => {
+  it("accepts an isolated HTTPS reader origin", () => {
+    expect(
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://pages.example.org",
+      })?.baseUrl.origin,
+    ).toBe("https://pages.example.org");
+  });
+
+  it("stays disabled when no reader origin is configured", () => {
+    expect(
+      parseContentEnvironment({ APP_BASE_URL: "https://knot.imai.tech" }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a control-plane sibling, paths, and insecure remote origins", () => {
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://reader.imai.tech",
+      }),
+    ).toThrow(/separate registrable domain/u);
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://reader.example.org/path",
+      }),
+    ).toThrow(/bare origin/u);
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "http://reader.example.org",
+      }),
+    ).toThrow(/HTTPS/u);
+  });
+});
+
 describe("email environment", () => {
   it("accepts a named sender and a comma-separated allowlist", () => {
     expect(
@@ -95,7 +135,9 @@ describe("R2 environment", () => {
   };
 
   it("uses a bounded default object size", () => {
-    expect(parseR2Environment(requiredR2).R2_MAX_OBJECT_BYTES).toBe(33_554_432);
+    expect(parseR2Environment(requiredR2).R2_MAX_OBJECT_BYTES).toBe(
+      104_857_600,
+    );
   });
 
   it("accepts an explicit limit and rejects unsafe values", () => {
@@ -111,7 +153,7 @@ describe("R2 environment", () => {
     expect(() =>
       parseR2Environment({
         ...requiredR2,
-        R2_MAX_OBJECT_BYTES: "134217729",
+        R2_MAX_OBJECT_BYTES: "104857601",
       }),
     ).toThrow();
   });

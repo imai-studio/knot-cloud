@@ -19,7 +19,10 @@ function objectStore(
 ): ObjectStore {
   return {
     maxObjectBytes: 32,
+    createPresignedAssetUpload: vi.fn(),
     putImmutable: vi.fn(),
+    putPublicationBundleImmutable: vi.fn(),
+    verify: vi.fn(),
     get: vi.fn(get),
     deleteTombstoned: vi.fn(),
   };

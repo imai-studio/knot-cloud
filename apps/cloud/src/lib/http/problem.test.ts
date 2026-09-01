@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { problemResponse } from "./problem";
 
 describe("problem response", () => {
+  afterEach(() => vi.unstubAllEnvs());
   it.each([429, 503] as const)(
     "adds Retry-After to retryable %s responses",
     (status) => {
@@ -35,6 +36,20 @@ describe("problem response", () => {
   it("builds problem types from the trusted application origin", async () => {
     const response = problemResponse({
       problemBaseUrl: "https://trusted.knot.test/console",
+      status: 400,
+      code: "invalid-request",
+      title: "Invalid request",
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      type: "https://trusted.knot.test/problems/invalid-request",
+    });
+  });
+
+  it("ignores a caller-controlled request host when no override is supplied", async () => {
+    vi.stubEnv("APP_BASE_URL", "https://trusted.knot.test/console");
+    const response = problemResponse({
+      request: new Request("https://attacker.example/problems"),
       status: 400,
       code: "invalid-request",
       title: "Invalid request",

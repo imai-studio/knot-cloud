@@ -50,6 +50,37 @@ async function consume(
 }
 
 describe("R2PrivateObjectStore", () => {
+  it("returns every caller-controlled header required by a presigned upload", async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const object = locator(bytes);
+    const client = new S3Client({
+      region: "auto",
+      endpoint: "https://test-account.r2.cloudflarestorage.com",
+      credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    const signed = await store.createPresignedAssetUpload({
+      locator: object,
+      contentLength: bytes.byteLength,
+      contentType: "image/png",
+      expiresInSeconds: 600,
+    });
+    const url = new URL(signed.uploadUrl);
+
+    expect(signed.requiredHeaders).toEqual({
+      "cache-control": privateObjectCacheControl,
+      "content-length": "3",
+      "content-type": "image/png",
+      "if-none-match": "*",
+    });
+    expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";")).toEqual(
+      expect.arrayContaining(["content-length", "host", "if-none-match"]),
+    );
+    expect(url.searchParams.get("x-amz-meta-sha256")).toBe(object.sha256);
+    expect(url.searchParams.get("x-amz-meta-tenant-id")).toBe(tenantA);
+  });
+
   it("derives tenant-scoped keys and rejects caller-controlled path data", () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const first = objectKeyFor(locator(bytes));
@@ -477,7 +508,7 @@ describe("R2PrivateObjectStore", () => {
     expect(cancel).toHaveBeenCalledWith("stored object metadata is invalid");
   });
 
-  it("cancels an over-length stored response without replacing the size error", async () => {
+  it("cancels an over-length stored response without buffering it", async () => {
     const bytes = new Uint8Array([4, 5, 6]);
     const object = locator(new Uint8Array([4, 5]));
     const cancel = vi.fn(() => Promise.reject(new Error("cancel failed")));
@@ -502,13 +533,40 @@ describe("R2PrivateObjectStore", () => {
       bucket: "knot-test",
     });
 
-    await expect(store.get(object)).rejects.toBeInstanceOf(ObjectSizeError);
+    const stored = await store.get(object);
+    await expect(consume(stored!.stream)).rejects.toBeInstanceOf(
+      ObjectSizeError,
+    );
     expect(cancel).toHaveBeenCalledWith(
-      "object exceeded its declared byte length",
+      "stored object exceeds its verified length",
     );
   });
 
-  it("fails a download whose bytes or metadata do not match the key", async () => {
+  it("verifies a direct upload without returning a second buffered body", async () => {
+    const bytes = new Uint8Array([7, 8, 9]);
+    const object = locator(bytes);
+    const client = mockClient(async () => ({
+      Body: responseBody(bytes),
+      ContentLength: bytes.byteLength,
+      ContentType: "image/png",
+      Metadata: {
+        "byte-size": String(bytes.byteLength),
+        kind: "asset",
+        sha256: object.sha256,
+        "tenant-id": object.tenantId,
+      },
+    }));
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await expect(store.verify(object)).resolves.toEqual({
+      ...object,
+      key: objectKeyFor(object),
+      contentType: "image/png",
+      size: bytes.byteLength,
+    });
+  });
+
+  it("streams committed immutable bytes and still rejects identity metadata mismatches", async () => {
     const expected = new Uint8Array([4, 5]);
     const actual = new Uint8Array([4, 6]);
     const object = locator(expected);
@@ -529,12 +587,35 @@ describe("R2PrivateObjectStore", () => {
       maxObjectBytes: 8,
     });
 
-    await expect(store.get(object)).rejects.toBeInstanceOf(
-      ObjectDigestMismatchError,
-    );
+    const stored = await store.get(object);
+    await expect(consume(stored!.stream)).resolves.toEqual(actual);
 
     metadata["tenant-id"] = tenantB;
     await expect(store.get(object)).rejects.toThrow(/metadata does not match/u);
+  });
+
+  it("detects digest corruption during the publishability verification pass", async () => {
+    const expected = new Uint8Array([4, 5]);
+    const actual = new Uint8Array([4, 6]);
+    const object = locator(expected);
+    const store = new R2PrivateObjectStore({
+      client: mockClient(async () => ({
+        Body: responseBody(actual),
+        ContentLength: actual.byteLength,
+        ContentType: "image/png",
+        Metadata: {
+          "byte-size": String(actual.byteLength),
+          kind: "asset",
+          sha256: object.sha256,
+          "tenant-id": object.tenantId,
+        },
+      })),
+      bucket: "knot-test",
+    });
+
+    await expect(store.verify(object)).rejects.toBeInstanceOf(
+      ObjectDigestMismatchError,
+    );
   });
 
   it("rejects oversized stored objects before returning a body", async () => {
@@ -679,7 +760,7 @@ describe("R2PrivateObjectStore", () => {
           tombstonedAt: new Date(),
         },
       ]),
-    ).rejects.toThrow(/canonical asset key/u);
+    ).rejects.toThrow(/belong to tenantId/u);
     expect(client.send).not.toHaveBeenCalled();
   });
 });

@@ -56,6 +56,11 @@ Prerequisites: P2 connector identity and the P1 reader-domain decision.
 - Drain the durable deletion outbox until the publication bundle and its unshared assets are gone.
 - Test interruption recovery and immediate 404 behavior for pages and media.
 
+The implementation candidate uses `/p/<site>/<publication>` for pages and
+`/media/<site>/<publication-id>/<digest>` for immutable identifiers. It remains unreleased until a
+separate registrable content domain is selected and the checks in
+[`public-reader.md`](public-reader.md) pass there.
+
 Publishing can release only after disable and unpublish pass failure-injection tests. An upload path
 without those controls is incomplete.
 

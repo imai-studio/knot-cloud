@@ -36,8 +36,8 @@
   },
   "assetUpload": {
     "protocolVersion": "1.0",
-    "connectorId": "connector-1",
-    "siteId": "site-1",
+    "connectorId": "00000000-0000-4000-8000-000000000011",
+    "siteId": "00000000-0000-4000-8000-000000000021",
     "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
     "byteSize": 128,
     "contentType": "image/png",

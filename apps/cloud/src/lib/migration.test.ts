@@ -20,15 +20,15 @@ const pairingActor = "00000000-0000-4000-8000-000000000081";
 const pairingA = "00000000-0000-4000-8000-000000000091";
 const pairingB = "00000000-0000-4000-8000-000000000092";
 const pairingC = "00000000-0000-4000-8000-000000000093";
+const migrationDirectory = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "migrations",
+);
 
 describe("migration inventory", () => {
   it("grandfathers the shipped 0001 pair and keeps later prefixes unique", async () => {
-    const migrationDirectory = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "migrations",
-    );
     const migrationFiles = (await readdir(migrationDirectory))
       .filter((name) => /^\d+.*\.sql$/u.test(name))
       .sort();
@@ -43,6 +43,28 @@ describe("migration inventory", () => {
       .filter((name) => Number(name.slice(0, 4)) >= 2)
       .map((name) => name.slice(0, name.indexOf("_")));
     expect(new Set(laterOrderingKeys).size).toBe(laterOrderingKeys.length);
+  });
+});
+
+describe("migration plan", () => {
+  it("orders the public reader after 0009 and before the future 0010 migration", async () => {
+    const migrationFiles = (await readdir(migrationDirectory))
+      .filter((name) => /^\d+.*\.sql$/u.test(name))
+      .sort();
+
+    expect(migrationFiles).toContain("0009_publication_lifecycle.sql");
+    expect(migrationFiles).toContain("0009a_public_reader.sql");
+    expect(
+      [
+        "0010_scoped_data_api.sql",
+        "0009a_public_reader.sql",
+        "0009_publication_lifecycle.sql",
+      ].sort(),
+    ).toEqual([
+      "0009_publication_lifecycle.sql",
+      "0009a_public_reader.sql",
+      "0010_scoped_data_api.sql",
+    ]);
   });
 });
 
@@ -65,12 +87,6 @@ describe("P0 database isolation", () => {
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    const migrationDirectory = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "migrations",
-    );
     const migrationFiles = (await readdir(migrationDirectory))
       .filter((name) => /^\d+.*\.sql$/u.test(name))
       .sort();

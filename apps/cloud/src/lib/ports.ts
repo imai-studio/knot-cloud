@@ -6,6 +6,11 @@ export interface ObjectLocator {
   sha256: string;
 }
 
+export interface PublicationBundleLocator extends ObjectLocator {
+  publicationId: string;
+  versionId: string;
+}
+
 export interface StoredObjectDescriptor extends ObjectLocator {
   key: string;
   contentType: string;
@@ -26,12 +31,29 @@ export interface TombstonedObject {
 
 export interface ObjectStore {
   readonly maxObjectBytes: number;
+  createPresignedAssetUpload(input: {
+    locator: ObjectLocator;
+    contentLength: number;
+    contentType: string;
+    expiresInSeconds: number;
+  }): Promise<{
+    uploadUrl: string;
+    requiredHeaders: Record<string, string>;
+    expiresAt: Date;
+  }>;
   putImmutable(input: {
     locator: ObjectLocator;
     body: ReadableStream<Uint8Array> | Uint8Array;
     contentLength?: number;
     contentType: string;
   }): Promise<StoredObjectDescriptor>;
+  putPublicationBundleImmutable(input: {
+    locator: PublicationBundleLocator;
+    body: ReadableStream<Uint8Array> | Uint8Array;
+    contentLength?: number;
+    contentType: "application/vnd.imai.knot.publication+json";
+  }): Promise<StoredObjectDescriptor>;
+  verify(locator: ObjectLocator): Promise<StoredObjectDescriptor | undefined>;
   get(locator: ObjectLocator): Promise<StoredObject | undefined>;
   deleteTombstoned(objects: TombstonedObject[]): Promise<void>;
 }

@@ -148,6 +148,25 @@ describe("signed connector requests", () => {
     expect(() =>
       publicationMutationSchema.pick({ slug: true }).parse({ slug: "a//b" }),
     ).toThrow();
+
+    const digest = "1".repeat(64);
+    expect(() =>
+      publicationMutationSchema.parse({
+        connectorId: "00000000-0000-4000-8000-000000000011",
+        siteId: "00000000-0000-4000-8000-000000000021",
+        publicationId: "00000000-0000-4000-8000-000000000031",
+        slug: "page",
+        operation: "create",
+        document: {
+          schemaVersion: "1.0",
+          title: "Page",
+          blocks: [{ type: "image", assetDigest: digest }],
+        },
+        contentSha256: "2".repeat(64),
+        assetDigests: [],
+        idempotencyKey: "publication-key-0001",
+      }),
+    ).toThrow(/declared/u);
   });
 });
 
