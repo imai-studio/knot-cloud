@@ -133,5 +133,32 @@ export const publicationControlOperationSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+export const publicationControlResultSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("publication.disable"),
+      publicationId: opaqueIdSchema,
+      disabledAt: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("publication.rollback"),
+      publicationId: opaqueIdSchema,
+      currentVersionId: opaqueIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("publication.unpublish"),
+      publicationId: opaqueIdSchema,
+      unpublishedAt: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
 export type PublicationDocument = z.infer<typeof publicationDocumentSchema>;
 export type PublicationMutation = z.infer<typeof publicationMutationSchema>;
+export type PublicationControlResult = z.infer<
+  typeof publicationControlResultSchema
+>;

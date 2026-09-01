@@ -229,4 +229,27 @@ describe("P0 database isolation", () => {
       `),
     ).rejects.toMatchObject({ code: "23505" });
   });
+
+  it("uses the frozen least-privilege scope vocabulary", async () => {
+    const labels = await database.query<{ enumlabel: string }>(
+      `SELECT enumlabel
+       FROM pg_enum
+       JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+       WHERE pg_type.typname = 'scope_name'
+       ORDER BY enumlabel`,
+    );
+    expect(labels.rows.map((row) => row.enumlabel)).toContain(
+      "anytype.chats.send",
+    );
+    expect(labels.rows.map((row) => row.enumlabel)).not.toContain(
+      "anytype.chats.write",
+    );
+    expect(labels.rows.map((row) => row.enumlabel)).toEqual(
+      expect.arrayContaining([
+        "anytype.collections.read",
+        "anytype.files.read",
+        "publications.read",
+      ]),
+    );
+  });
 });

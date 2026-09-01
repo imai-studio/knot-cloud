@@ -1,9 +1,20 @@
 import { z } from "zod";
 
-import { anytypeOperationSchema } from "./anytype-operation.js";
+import {
+  anytypeOperationSchema,
+  requiredScopeForAnytypeOperation,
+} from "./anytype-operation.js";
 import { opaqueIdSchema, unixSecondsSchema } from "./identifiers.js";
-import { principalKindSchema, scopeNameSchema } from "./protocol.js";
-import { publicationControlOperationSchema } from "./publication.js";
+import { anytypeOperationResultSchema } from "./operation-resource.js";
+import {
+  principalKindSchema,
+  protocolVersion,
+  scopeNameSchema,
+} from "./protocol.js";
+import {
+  publicationControlOperationSchema,
+  publicationControlResultSchema,
+} from "./publication.js";
 
 export const commandStateSchema = z.enum([
   "pending",
@@ -26,7 +37,7 @@ export const commandPayloadSchema = z.discriminatedUnion("domain", [
 
 export const commandEnvelopeSchema = z
   .object({
-    protocolVersion: z.literal("1.0"),
+    protocolVersion: z.literal(protocolVersion),
     commandId: opaqueIdSchema,
     connectorId: opaqueIdSchema,
     requiredScope: scopeNameSchema,
@@ -53,20 +64,102 @@ export const commandEnvelopeSchema = z
           "Command timestamps are out of order or exceed the maximum lifetime",
       });
     }
+    const expectedScope =
+      value.payload.domain === "anytype"
+        ? requiredScopeForAnytypeOperation(value.payload.operation)
+        : value.payload.operation.type === "publication.unpublish"
+          ? "publications.unpublish"
+          : "publications.write";
+    if (value.requiredScope !== expectedScope) {
+      context.addIssue({
+        code: "custom",
+        message: `Command requires ${expectedScope}`,
+      });
+    }
   });
 
 export const commandResultSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("succeeded"), result: z.unknown() }),
-  z.object({
-    outcome: z.literal("rejected-by-local-policy"),
-    reasonCode: z.string().min(1).max(200),
-  }),
-  z.object({
-    outcome: z.literal("failed"),
-    retryable: z.boolean(),
-    errorCode: z.string().min(1).max(200),
-  }),
+  z
+    .object({
+      outcome: z.literal("succeeded"),
+      result: z.union([
+        anytypeOperationResultSchema,
+        publicationControlResultSchema,
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("rejected-by-local-policy"),
+      reasonCode: z.string().min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal("failed"),
+      retryable: z.boolean(),
+      errorCode: z.string().min(1).max(200),
+    })
+    .strict(),
 ]);
+
+export const commandClaimRequestSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    maximumCommands: z.number().int().min(1).max(10).default(1),
+    leaseSeconds: z.number().int().min(15).max(300).default(60),
+  })
+  .strict();
+
+export const commandClaimResponseSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    commands: z.array(commandEnvelopeSchema).max(10),
+    pollAfterSeconds: z.number().int().min(1).max(300),
+  })
+  .strict();
+
+export const commandLeaseExtensionSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    commandId: opaqueIdSchema,
+    attempt: z.number().int().positive(),
+    leaseToken: z.string().min(32).max(200),
+    extendBySeconds: z.number().int().min(15).max(300),
+  })
+  .strict();
+
+export const commandLeaseFenceSchema = z
+  .object({
+    attempt: z.number().int().positive(),
+    leaseToken: z.string().min(32).max(200),
+  })
+  .strict();
+
+export const commandLeaseExtendedSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    commandId: opaqueIdSchema,
+    attempt: z.number().int().positive(),
+    leaseExpiresAt: unixSecondsSchema,
+  })
+  .strict();
+
+export const commandResultSubmissionSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    commandId: opaqueIdSchema,
+    attempt: z.number().int().positive(),
+    leaseToken: z.string().min(32).max(200),
+    result: commandResultSchema,
+  })
+  .strict();
 
 export type CommandEnvelope = z.infer<typeof commandEnvelopeSchema>;
 export type CommandResult = z.infer<typeof commandResultSchema>;
+export type CommandClaimRequest = z.infer<typeof commandClaimRequestSchema>;
+export type CommandClaimResponse = z.infer<typeof commandClaimResponseSchema>;
+export type CommandLeaseExtension = z.infer<typeof commandLeaseExtensionSchema>;
+export type CommandResultSubmission = z.infer<
+  typeof commandResultSubmissionSchema
+>;

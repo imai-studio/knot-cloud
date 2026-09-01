@@ -3,13 +3,18 @@ import { z } from "zod";
 export const scopeNameSchema = z.enum([
   "anytype.objects.read",
   "anytype.objects.write",
+  "anytype.collections.read",
   "anytype.collections.write",
+  "anytype.files.read",
   "anytype.files.write",
   "anytype.chats.read",
-  "anytype.chats.write",
+  "anytype.chats.send",
+  "publications.read",
   "publications.write",
   "publications.unpublish",
 ]);
+
+export type ScopeName = z.infer<typeof scopeNameSchema>;
 
 import { opaqueIdSchema } from "./identifiers.js";
 
@@ -33,13 +38,17 @@ export const principalKindSchema = z.enum([
   "first-party-service",
 ]);
 
-export const attestedProvenanceSchema = z.object({
-  kind: z.literal("connector-attested-anytype"),
-  connectorId: opaqueIdSchema,
-  senderDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-  spaceId: opaqueIdSchema,
-  objectId: opaqueIdSchema.optional(),
-  messageId: opaqueIdSchema.optional(),
-});
+export type PrincipalKind = z.infer<typeof principalKindSchema>;
+
+export const attestedProvenanceSchema = z
+  .object({
+    kind: z.literal("connector-attested-anytype"),
+    connectorId: opaqueIdSchema,
+    senderDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    spaceId: opaqueIdSchema,
+    objectId: opaqueIdSchema.optional(),
+    messageId: opaqueIdSchema.optional(),
+  })
+  .strict();
 
 export type AttestedProvenance = z.infer<typeof attestedProvenanceSchema>;
