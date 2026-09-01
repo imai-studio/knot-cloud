@@ -8,13 +8,16 @@ WORKDIR /workspace
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/cloud/package.json apps/cloud/package.json
 COPY packages/cloud-contract/package.json packages/cloud-contract/package.json
+COPY packages/publication-renderer/package.json packages/publication-renderer/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
 WORKDIR /workspace
 COPY apps/cloud apps/cloud
 COPY packages/cloud-contract packages/cloud-contract
+COPY packages/publication-renderer packages/publication-renderer
 RUN pnpm --filter @imai/knot-cloud-contract build
+RUN pnpm --filter @imai/knot-publication-renderer build
 RUN pnpm --filter @imai/knot-cloud build
 
 FROM dependencies AS migrator
