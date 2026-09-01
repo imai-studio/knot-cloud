@@ -1417,6 +1417,14 @@ describe("P0 database isolation", () => {
     await expect(
       database.query(
         `SELECT * FROM approve_pairing_session(
+          $1, $2, $3, NULL::scope_name[], $4::uuid[], $5::text[], now()
+        )`,
+        [tenantA, pairingA, pairingActor, pgArray([]), pgArray([])],
+      ),
+    ).rejects.toMatchObject({ code: "22023" });
+    await expect(
+      database.query(
+        `SELECT * FROM approve_pairing_session(
           $1, $2, $3, $4::scope_name[], $5::uuid[], $6::text[], now()
         )`,
         [
@@ -1646,6 +1654,13 @@ describe("P0 database isolation", () => {
       [tenantA, connectorId, pairingActor, "Renamed connector"],
     );
     expect(renamed.rows).toEqual([{ changed: true }]);
+    await expect(
+      database.query("SELECT rename_connector($1, $2, $3, NULL) AS changed", [
+        tenantA,
+        connectorId,
+        pairingActor,
+      ]),
+    ).rejects.toMatchObject({ code: "22023" });
     const first = await database.query<{ revoked: boolean }>(
       "SELECT revoke_connector($1, $2, $3, now()) AS revoked",
       [tenantA, connectorId, pairingActor],

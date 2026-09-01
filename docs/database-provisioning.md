@@ -26,6 +26,18 @@ applied migration is absent from the checkout, when an applied file's digest cha
 pending filename sorts before the newest applied filename. Restore the expected checkout or repair
 the ledger from a verified backup instead of bypassing these checks.
 
+Before applying connector pairing migration `0008`, verify that each connector public key is unique
+inside its workspace:
+
+```sql
+SELECT tenant_id, encode(public_key, 'hex'), count(*)
+FROM connectors
+GROUP BY tenant_id, public_key
+HAVING count(*) > 1;
+```
+
+Resolve every returned duplicate before migration. Pairing adds a unique index over this key.
+
 The application verifies the runtime role before protected routes are enabled. Credential lookup
 uses narrowly scoped security-definer functions owned by the no-login `knot_resolver` role; raw
 tenant table reads still fail closed before a tenant context is established.

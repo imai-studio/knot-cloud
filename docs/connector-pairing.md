@@ -52,7 +52,7 @@ The local connector uses only:
 - `POST /api/v1/pairing/poll` with the pairing ID and one-time poll token in the versioned JSON
   body.
 
-Pending polls can repeat. Knot Cloud allows 30 poll attempts per minute for each address reported by
+Pending polls can repeat. Knot Cloud allows 120 poll attempts per minute for each address reported by
 Vercel. Requests without a Vercel client-address header share one fallback bucket. The route stops
 with `503` if Upstash is unavailable instead of accepting an unthrottled poll.
 
@@ -75,8 +75,9 @@ records whose result expired more than 30 days earlier and returns at most 50 re
   the one-time poll token.
 - Revocation is idempotent and permanently blocks that public key in the workspace.
 
-Site and slug grants limit Knot Cloud operations. They do not grant local Anytype, filesystem, or
-agent access. The local Knot policy still decides whether to run each command.
+Site and slug grants are recorded for command authorization. Enforcement begins with command
+transport; they do not grant local Anytype, filesystem, or agent access. The local Knot policy still
+decides whether to run each command.
 
 The pairing route registers identity and cloud grants only. Signed connector heartbeat and command
 transport remain separate work in the implementation roadmap.

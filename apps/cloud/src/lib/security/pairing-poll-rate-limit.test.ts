@@ -23,10 +23,10 @@ describe("pairing poll rate limit", () => {
     ).toBe("unknown-client");
   });
 
-  it("allows thirty attempts per fixed window and returns the store TTL", async () => {
+  it("allows 120 attempts per fixed window and returns the store TTL", async () => {
     const counter = { increment: vi.fn() };
-    counter.increment.mockResolvedValueOnce([30, 22]);
-    counter.increment.mockResolvedValueOnce([31, 21]);
+    counter.increment.mockResolvedValueOnce([120, 22]);
+    counter.increment.mockResolvedValueOnce([121, 21]);
     const request = new Request("https://knot.example/api/v1/pairing/poll", {
       headers: { "x-vercel-forwarded-for": "198.51.100.2" },
     });

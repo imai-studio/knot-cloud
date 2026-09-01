@@ -128,6 +128,19 @@ describe("pairing and connector routes", () => {
     expect(repository.poll).not.toHaveBeenCalled();
   });
 
+  it("fails closed when poll protection is unavailable", async () => {
+    vi.mocked(checkPairingPollRateLimit).mockRejectedValue(
+      new Error("rate-limit store unavailable"),
+    );
+    const response = await pollPairing(
+      request("/api/v1/pairing/poll", pollBody()),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("3");
+    expect(repository.poll).not.toHaveBeenCalled();
+  });
+
   it("allows only owners and admins to create or review pairing requests", async () => {
     vi.mocked(getAuthorizedWorkspace).mockResolvedValue({
       ...authorized,

@@ -4,7 +4,7 @@ import { Redis } from "@upstash/redis";
 
 import { getUpstashEnvironment } from "@/lib/env";
 
-const limit = 30;
+const limit = 120;
 const windowSeconds = 60;
 
 const fixedWindowScript = `

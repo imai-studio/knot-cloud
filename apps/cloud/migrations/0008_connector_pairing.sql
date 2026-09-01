@@ -93,6 +93,9 @@ CREATE TABLE pairing_sessions (
       AND granted_site_ids IS NULL AND granted_slug_grants IS NULL)
     OR (state = 'approved' AND approved_connector_id IS NOT NULL
       AND approved_at IS NOT NULL AND denied_at IS NULL
+      AND granted_scopes IS NOT NULL
+      AND granted_site_ids IS NOT NULL
+      AND granted_slug_grants IS NOT NULL
       AND cardinality(granted_scopes) >= 1
       AND cardinality(granted_site_ids) <= 100
       AND cardinality(granted_slug_grants) <= 100
@@ -110,6 +113,9 @@ CREATE TABLE pairing_sessions (
 
 CREATE INDEX pairing_sessions_tenant_state_created_idx
   ON pairing_sessions (tenant_id, state, created_at DESC);
+
+CREATE INDEX pairing_sessions_tenant_expiry_idx
+  ON pairing_sessions (tenant_id, expires_at);
 
 DO $$
 DECLARE
@@ -171,7 +177,10 @@ BEGIN
     RETURN QUERY SELECT 'forbidden'::text, NULL::uuid, NULL::timestamptz;
     RETURN;
   END IF;
-  IF cardinality(approved_scopes) < 1
+  IF approved_scopes IS NULL
+     OR approved_site_ids IS NULL
+     OR approved_slug_grants IS NULL
+     OR cardinality(approved_scopes) < 1
      OR cardinality(approved_site_ids) > 100
      OR cardinality(approved_slug_grants) > 100
      OR array_position(approved_scopes, NULL) IS NOT NULL
@@ -395,7 +404,8 @@ BEGIN
     RAISE EXCEPTION 'Connector tenant does not match the active tenant'
       USING ERRCODE = '42501';
   END IF;
-  IF length(trim(requested_name)) NOT BETWEEN 1 AND 100 THEN
+  IF requested_name IS NULL
+     OR length(trim(requested_name)) NOT BETWEEN 1 AND 100 THEN
     RAISE EXCEPTION 'Invalid connector name' USING ERRCODE = '22023';
   END IF;
   IF NOT EXISTS (
