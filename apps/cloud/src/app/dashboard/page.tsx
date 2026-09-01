@@ -17,6 +17,7 @@ import { AccountMenu } from "@/components/account-menu";
 import { Brand } from "@/components/brand";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { getAuthorizedSession } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { getAuthorizedWorkspace } from "@/lib/workspace-auth";
 
@@ -86,8 +87,32 @@ export default async function DashboardPage({
 }: {
   searchParams: Promise<{ view?: string | string[] }>;
 }) {
-  const authorized = await getAuthorizedWorkspace(await headers());
-  if (!authorized) redirect("/login");
+  const requestHeaders = await headers();
+  const authorized = await getAuthorizedWorkspace(requestHeaders);
+  if (!authorized) {
+    const identity = await getAuthorizedSession(requestHeaders);
+    if (!identity) redirect("/login");
+    return (
+      <main className="min-h-dvh bg-muted/35 px-5 py-5 sm:px-8 sm:py-7">
+        <div className="mx-auto flex max-w-4xl items-center justify-between">
+          <Brand href="/dashboard" />
+          <AccountMenu email={identity.user.email} name={identity.user.name} />
+        </div>
+        <section className="mx-auto mt-24 max-w-xl rounded-2xl border bg-background p-8 sm:p-10">
+          <p className="text-sm font-medium text-muted-foreground">
+            Workspace unavailable
+          </p>
+          <h1 className="mt-3 font-heading text-4xl font-medium tracking-tight">
+            This account has no active workspace.
+          </h1>
+          <p className="mt-4 leading-7 text-muted-foreground">
+            Ask the Knot operator to restore a workspace or add this account to
+            an active one.
+          </p>
+        </section>
+      </main>
+    );
+  }
   const view = resolveDashboardView((await searchParams).view);
   const activeItem = navItems.find((item) => item.id === view) ?? navItems[0];
 

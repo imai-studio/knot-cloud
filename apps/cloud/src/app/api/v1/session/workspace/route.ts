@@ -1,7 +1,7 @@
 import { problemDetailsSchema } from "@imai/knot-cloud-contract";
 import { z } from "zod";
 
-import { isTrustedHumanMutationOrigin } from "@/lib/auth";
+import { getAuthorizedSession, isTrustedHumanMutationOrigin } from "@/lib/auth";
 import {
   getAuthorizedWorkspace,
   selectAuthorizedWorkspace,
@@ -16,7 +16,12 @@ export async function GET(request: Request) {
   // workspace bootstrap. The database verifies the Better Auth session and serializes
   // creation; anonymous or unverified requests cannot mutate tenant state.
   const authorized = await getAuthorizedWorkspace(request.headers);
-  if (!authorized) return problem(request, 401, "authentication-required");
+  if (!authorized) {
+    const identity = await getAuthorizedSession(request.headers);
+    return identity
+      ? problem(request, 403, "forbidden")
+      : problem(request, 401, "authentication-required");
+  }
   return workspaceResponse(authorized.workspace);
 }
 

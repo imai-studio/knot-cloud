@@ -1,7 +1,7 @@
 import { problemDetailsSchema } from "@imai/knot-cloud-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isTrustedHumanMutationOrigin } from "@/lib/auth";
+import { getAuthorizedSession, isTrustedHumanMutationOrigin } from "@/lib/auth";
 import {
   getAuthorizedWorkspace,
   selectAuthorizedWorkspace,
@@ -10,6 +10,7 @@ import {
 import { GET, PUT } from "./route";
 
 vi.mock("@/lib/auth", () => ({
+  getAuthorizedSession: vi.fn(),
   isTrustedHumanMutationOrigin: vi.fn(),
 }));
 vi.mock("@/lib/workspace-auth", () => ({
@@ -36,6 +37,7 @@ describe("session workspace route", () => {
     vi.mocked(getAuthorizedWorkspace).mockReset();
     vi.mocked(selectAuthorizedWorkspace).mockReset();
     vi.mocked(isTrustedHumanMutationOrigin).mockReset();
+    vi.mocked(getAuthorizedSession).mockReset();
   });
 
   it("returns the workspace selected for the signed-in session", async () => {
@@ -67,6 +69,20 @@ describe("session workspace route", () => {
     expect(body.code).toBe("authentication-required");
     expect(getAuthorizedWorkspace).toHaveBeenCalledOnce();
     expect(getAuthorizedWorkspace).toHaveBeenCalledWith(expect.any(Headers));
+  });
+
+  it("returns forbidden when a signed-in session has no active workspace", async () => {
+    vi.mocked(getAuthorizedWorkspace).mockResolvedValue(null);
+    vi.mocked(getAuthorizedSession).mockResolvedValue(
+      authorized.identity as Awaited<ReturnType<typeof getAuthorizedSession>>,
+    );
+    const response = await GET(
+      new Request("https://knot.example/api/v1/session/workspace"),
+    );
+    const body = problemDetailsSchema.parse(await response.json());
+
+    expect(response.status).toBe(403);
+    expect(body.code).toBe("forbidden");
   });
 
   it("rejects cross-origin and malformed workspace changes", async () => {

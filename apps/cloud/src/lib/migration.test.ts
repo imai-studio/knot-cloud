@@ -614,6 +614,44 @@ describe("P0 database isolation", () => {
     expect(membership.rows).toEqual([{ is_default: true }]);
   });
 
+  it("skips suspended selections and memberships during workspace resolution", async () => {
+    const projectedUser = "00000000-0000-4000-8000-000000000073";
+    await database.exec(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt"
+      ) VALUES (
+        '${authUserA}', 'Workspace owner', 'owner@example.test', true, now(), now()
+      );
+      INSERT INTO auth.session (
+        id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+      ) VALUES (
+        '${authSessionA}', now() + interval '1 hour', 'workspace-token-a',
+        now(), now(), '${authUserA}'
+      );
+      INSERT INTO users (id, auth_user_id, email_digest, email_digest_version)
+      VALUES ('${projectedUser}', '${authUserA}', '${"2".repeat(64)}', 1);
+      UPDATE tenants SET suspended_at = now() WHERE id = '${tenantA}';
+      INSERT INTO tenant_members (tenant_id, user_id, role, is_default)
+      VALUES ('${tenantA}', '${projectedUser}', 'owner', true);
+      INSERT INTO session_tenant_selections (
+        auth_session_id, auth_user_id, user_id, tenant_id
+      ) VALUES (
+        '${authSessionA}', '${authUserA}', '${projectedUser}', '${tenantA}'
+      );
+      SET ROLE knot_app;
+    `);
+
+    const workspace = await resolveWorkspace(database, authSessionA);
+    expect(workspace.rows).toHaveLength(1);
+    expect(workspace.rows[0]).toMatchObject({
+      member_role: "owner",
+      suspended_at: null,
+      tenant_name: "Personal workspace",
+      user_id: projectedUser,
+    });
+    expect(workspace.rows[0]?.tenant_id).not.toBe(tenantA);
+  });
+
   it("enforces case-insensitive uniqueness for Better Auth email addresses", async () => {
     await database.exec(`
       INSERT INTO auth."user" (
@@ -676,14 +714,26 @@ describe("P0 database isolation", () => {
         user_count: 1,
       },
     ]);
-    const audit = await database.query<{ count: number }>(`
-      SELECT count(*)::int AS count FROM audit_events
+    const audit = await database.query<{
+      actor_digest: string;
+      actor_digest_version: number;
+      count: number;
+    }>(`
+      SELECT max(actor_digest) AS actor_digest,
+        max(actor_digest_version)::int AS actor_digest_version,
+        count(*)::int AS count FROM audit_events
       WHERE tenant_id = '${workspace.rows[0]?.tenant_id}'
         AND action = 'identity.legacy-claim'
         AND target_id = '${projectedUser}'
         AND metadata = '{"digestVersion": 7}'::jsonb
     `);
-    expect(audit.rows).toEqual([{ count: 1 }]);
+    expect(audit.rows).toEqual([
+      {
+        actor_digest: "2".repeat(64),
+        actor_digest_version: 7,
+        count: 1,
+      },
+    ]);
   });
 
   it("removes the duplicate session authority and protects workspace projections", async () => {

@@ -72,6 +72,9 @@ CREATE TABLE session_tenant_selections (
     REFERENCES tenant_members(tenant_id, user_id) ON DELETE CASCADE
 );
 
+CREATE INDEX session_tenant_selections_membership_idx
+  ON session_tenant_selections (tenant_id, user_id);
+
 ALTER TABLE session_tenant_selections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE session_tenant_selections FORCE ROW LEVEL SECURITY;
 
@@ -184,7 +187,8 @@ BEGIN
   JOIN public.tenants AS selected_tenant ON selected_tenant.id = selection.tenant_id
   WHERE selection.auth_session_id = lookup_auth_session_id
     AND selection.auth_user_id = lookup_auth_user_id
-    AND selection.user_id = resolved_user_id;
+    AND selection.user_id = resolved_user_id
+    AND selected_tenant.suspended_at IS NULL;
 
   IF resolved_tenant_id IS NULL THEN
     SELECT default_tenant.id, default_tenant.name, membership.role,
@@ -195,6 +199,7 @@ BEGIN
     JOIN public.tenants AS default_tenant ON default_tenant.id = membership.tenant_id
     WHERE membership.user_id = resolved_user_id
       AND membership.is_default
+      AND default_tenant.suspended_at IS NULL
     LIMIT 1;
   END IF;
 
@@ -206,10 +211,17 @@ BEGIN
     FROM public.tenant_members AS membership
     JOIN public.tenants AS existing_tenant ON existing_tenant.id = membership.tenant_id
     WHERE membership.user_id = resolved_user_id
+      AND existing_tenant.suspended_at IS NULL
     ORDER BY existing_tenant.created_at, existing_tenant.id
     LIMIT 1;
 
     IF resolved_tenant_id IS NOT NULL THEN
+      UPDATE public.tenant_members AS membership
+      SET is_default = false
+      WHERE membership.user_id = resolved_user_id
+        AND membership.tenant_id <> resolved_tenant_id
+        AND membership.is_default;
+
       UPDATE public.tenant_members AS membership
       SET is_default = true
       WHERE membership.tenant_id = resolved_tenant_id
@@ -218,6 +230,11 @@ BEGIN
   END IF;
 
   IF resolved_tenant_id IS NULL THEN
+    UPDATE public.tenant_members AS membership
+    SET is_default = false
+    WHERE membership.user_id = resolved_user_id
+      AND membership.is_default;
+
     INSERT INTO public.tenants (name)
     VALUES (trim(default_workspace_name))
     RETURNING tenants.id, tenants.name, tenants.suspended_at
@@ -243,10 +260,12 @@ BEGIN
     INSERT INTO public.audit_events (
       tenant_id, principal_kind, principal_id, action,
       target_kind, target_id, outcome,
+      actor_digest, actor_digest_version,
       metadata
     ) VALUES (
       resolved_tenant_id, 'human-session', resolved_user_id,
       'identity.legacy-claim', 'user', resolved_user_id, 'succeeded',
+      lookup_email_digest, lookup_email_digest_version,
       jsonb_build_object('digestVersion', lookup_email_digest_version)
     );
   END IF;
