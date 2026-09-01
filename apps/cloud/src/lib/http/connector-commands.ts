@@ -226,7 +226,9 @@ export function createConnectorCommandHandlers(
         typeof error === "object" &&
         error !== null &&
         "code" in error &&
-        error.code === "22023"
+        (error.code === "22023" ||
+          error.code === "22P02" ||
+          error.code === "22P05")
       ) {
         return problemResponse({
           problemBaseUrl: dependencies.problemBaseUrl,

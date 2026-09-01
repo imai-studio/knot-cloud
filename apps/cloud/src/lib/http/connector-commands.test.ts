@@ -436,33 +436,36 @@ describe("connector command HTTP service", () => {
     expect(complete).toHaveBeenCalledOnce();
   });
 
-  it("maps database parameter validation to an unprocessable result", async () => {
-    const databaseError = Object.assign(new Error("result type mismatch"), {
-      code: "22023",
-    });
-    const complete = vi
-      .fn<CommandLedger["complete"]>()
-      .mockRejectedValue(databaseError);
-    const response = await handlers(commands({ complete })).complete(
-      request(`/api/v1/connectors/${connectorId}/commands/result`, {
-        protocolVersion: "1.0",
-        commandId,
-        attempt: 1,
-        leaseToken: "lease_token_1234567890abcdefghijklmnop",
-        result: {
-          outcome: "rejected-by-local-policy",
-          reasonCode: "operator-approval-required",
-        },
-      }),
-      connectorId,
-    );
+  it.each(["22023", "22P02", "22P05"])(
+    "maps database input error %s to an unprocessable result",
+    async (databaseCode) => {
+      const databaseError = Object.assign(new Error("result type mismatch"), {
+        code: databaseCode,
+      });
+      const complete = vi
+        .fn<CommandLedger["complete"]>()
+        .mockRejectedValue(databaseError);
+      const response = await handlers(commands({ complete })).complete(
+        request(`/api/v1/connectors/${connectorId}/commands/result`, {
+          protocolVersion: "1.0",
+          commandId,
+          attempt: 1,
+          leaseToken: "lease_token_1234567890abcdefghijklmnop",
+          result: {
+            outcome: "rejected-by-local-policy",
+            reasonCode: "operator-approval-required",
+          },
+        }),
+        connectorId,
+      );
 
-    expect(response.status).toBe(422);
-    expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
-      code: "invalid-request",
-      retryable: false,
-    });
-  });
+      expect(response.status).toBe(422);
+      expect(problemDetailsSchema.parse(await response.json())).toMatchObject({
+        code: "invalid-request",
+        retryable: false,
+      });
+    },
+  );
 
   it("logs an internal command failure with the response request id", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
