@@ -25,6 +25,8 @@ const deleteBatchSize = 1_000;
 const maximumAssetBytes = 104_857_600;
 const defaultMaxObjectBytes = maximumAssetBytes;
 const hardMaxObjectBytes = maximumAssetBytes;
+export const r2RequestChecksumCalculation = "WHEN_REQUIRED" as const;
+export const r2ResponseChecksumValidation = "WHEN_REQUIRED" as const;
 const tenantIdPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -106,6 +108,26 @@ function validateTombstonedKey(object: TombstonedObject): string {
     throw new TypeError("key must be a canonical tenant object key");
   }
   return object.key;
+}
+
+export function r2ClientConfiguration(input: {
+  R2_ACCOUNT_ID: string;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+}) {
+  return {
+    region: "auto",
+    endpoint: `https://${input.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    // R2 rejects a PutObject request that carries both our explicit
+    // Content-MD5 and the SDK's optional flexible checksum. Object reads are
+    // verified against Knot's SHA-256 metadata after download instead.
+    requestChecksumCalculation: r2RequestChecksumCalculation,
+    responseChecksumValidation: r2ResponseChecksumValidation,
+    credentials: {
+      accessKeyId: input.R2_ACCESS_KEY_ID,
+      secretAccessKey: input.R2_SECRET_ACCESS_KEY,
+    },
+  } satisfies ConstructorParameters<typeof S3Client>[0];
 }
 
 async function materializeBody(input: {
@@ -319,14 +341,7 @@ export class R2PrivateObjectStore implements ObjectStore {
       const environment = getR2Environment();
       this.#bucket = environment.R2_BUCKET_NAME;
       this.maxObjectBytes = environment.R2_MAX_OBJECT_BYTES;
-      this.#client = new S3Client({
-        region: "auto",
-        endpoint: `https://${environment.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId: environment.R2_ACCESS_KEY_ID,
-          secretAccessKey: environment.R2_SECRET_ACCESS_KEY,
-        },
-      });
+      this.#client = new S3Client(r2ClientConfiguration(environment));
     }
 
     if (

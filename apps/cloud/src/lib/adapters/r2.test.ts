@@ -15,6 +15,7 @@ import {
   ObjectDigestMismatchError,
   ObjectSizeError,
   objectKeyFor,
+  r2ClientConfiguration,
   R2PrivateObjectStore,
 } from "./r2";
 
@@ -50,13 +51,60 @@ async function consume(
 }
 
 describe("R2PrivateObjectStore", () => {
+  it("does not add a second checksum beside the explicit Content-MD5", async () => {
+    const bytes = new TextEncoder().encode("abc");
+    const contentMd5 = createHash("md5").update(bytes).digest("base64");
+    let serializedHeaders: Record<string, string> | undefined;
+    const configuration = r2ClientConfiguration({
+      R2_ACCOUNT_ID: "test-account",
+      R2_ACCESS_KEY_ID: "test-key",
+      R2_SECRET_ACCESS_KEY: "test-secret",
+    });
+    expect(configuration.requestChecksumCalculation).toBe("WHEN_REQUIRED");
+    expect(configuration.responseChecksumValidation).toBe("WHEN_REQUIRED");
+    const client = new S3Client({
+      ...configuration,
+      requestHandler: {
+        handle: async (request: { headers: Record<string, string> }) => {
+          serializedHeaders = request.headers;
+          return {
+            response: {
+              statusCode: 200,
+              headers: { etag: '"900150983cd24fb0d6963f7d28e17f72"' },
+              body: new Uint8Array(),
+            },
+          };
+        },
+      },
+    });
+    const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
+
+    await store.putImmutable({
+      locator: locator(bytes),
+      body: bytes,
+      contentType: "application/octet-stream",
+    });
+
+    expect(serializedHeaders?.["content-md5"]).toBe(contentMd5);
+    expect(
+      Object.keys(serializedHeaders ?? {}).filter(
+        (header) =>
+          header === "content-md5" ||
+          header.startsWith("x-amz-checksum-") ||
+          header === "x-amz-sdk-checksum-algorithm",
+      ),
+    ).toEqual(["content-md5"]);
+  });
+
   it("returns every caller-controlled header required by a presigned upload", async () => {
     const bytes = new Uint8Array([1, 2, 3]);
     const object = locator(bytes);
     const client = new S3Client({
-      region: "auto",
-      endpoint: "https://test-account.r2.cloudflarestorage.com",
-      credentials: { accessKeyId: "test-key", secretAccessKey: "test-secret" },
+      ...r2ClientConfiguration({
+        R2_ACCOUNT_ID: "test-account",
+        R2_ACCESS_KEY_ID: "test-key",
+        R2_SECRET_ACCESS_KEY: "test-secret",
+      }),
     });
     const store = new R2PrivateObjectStore({ client, bucket: "knot-test" });
 
