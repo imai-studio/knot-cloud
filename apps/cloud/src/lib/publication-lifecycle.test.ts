@@ -10,6 +10,7 @@ const tenantA = "10000000-0000-4000-8000-000000000001";
 const tenantB = "20000000-0000-4000-8000-000000000001";
 const connectorA = "10000000-0000-4000-8000-000000000011";
 const connectorB = "20000000-0000-4000-8000-000000000011";
+const connectorA2 = "10000000-0000-4000-8000-000000000012";
 const siteA = "10000000-0000-4000-8000-000000000021";
 const siteB = "20000000-0000-4000-8000-000000000021";
 const publicationA = "10000000-0000-4000-8000-000000000031";
@@ -61,9 +62,11 @@ describe("publication lifecycle migration", () => {
         id, tenant_id, name, protocol_version, public_key, scopes
       ) VALUES
         ('${connectorA}', '${tenantA}', 'A', '1.0', decode(repeat('00', 32), 'hex'),
-         '{publications.write,publications.unpublish}'),
+         '{publications.read,publications.write,publications.unpublish}'),
+        ('${connectorA2}', '${tenantA}', 'A2', '1.0', decode(repeat('00', 32), 'hex'),
+         '{publications.read,publications.write,publications.unpublish}'),
         ('${connectorB}', '${tenantB}', 'B', '1.0', decode(repeat('00', 32), 'hex'),
-         '{publications.write,publications.unpublish}');
+         '{publications.read,publications.write,publications.unpublish}');
       INSERT INTO sites (id, tenant_id, name, slug) VALUES
         ('${siteA}', '${tenantA}', 'Site A', 'site-a'),
         ('${siteB}', '${tenantB}', 'Site B', 'site-b');
@@ -520,6 +523,260 @@ describe("publication lifecycle migration", () => {
       [tenantA, pathname],
     );
     expect(queued.rows).toEqual([{ pathname }]);
+  });
+
+  it("requires an explicit per-publication connector grant for status and controls", async () => {
+    const digest = digestDocument(document);
+    await database.query(
+      "SELECT authorize_publication_write($1, $2, $3, 'create')",
+      [tenantA, connectorA, publicationA],
+    );
+    await prepareVersion(versionA1, digest, "create");
+    await database.query("SELECT grant_publication_creator($1, $2, $3, $4)", [
+      tenantA,
+      connectorA,
+      publicationA,
+      versionA1,
+    ]);
+    await database.query(
+      "SELECT bind_publication_provenance($1, $2, $3, $4, $5::jsonb)",
+      [
+        tenantA,
+        connectorA,
+        publicationA,
+        versionA1,
+        JSON.stringify({
+          sourceType: "anytype-object",
+          sourceDigest: "d".repeat(64),
+          sourcePointer: "object_pointer_1",
+        }),
+      ],
+    );
+
+    const status = await database.query<{ publication_status: string }>(
+      "SELECT publication_status FROM get_connector_publication_status($1, $2, $3)",
+      [tenantA, connectorA, publicationA],
+    );
+    expect(status.rows).toEqual([{ publication_status: "draft" }]);
+    await expect(
+      database.query(
+        "SELECT publication_status FROM get_connector_publication_status($1, $2, $3)",
+        [tenantA, connectorA2, publicationA],
+      ),
+    ).rejects.toThrow(/no publication read grant/u);
+    await expect(
+      database.query(
+        "SELECT authorize_publication_write($1, $2, $3, 'update')",
+        [tenantA, connectorA2, publicationA],
+      ),
+    ).rejects.toThrow(/no publication grant/u);
+
+    const requestDigest = "e".repeat(64);
+    const first = await database.query<{ result: unknown }>(
+      `SELECT control_publication_as_connector(
+        $1, $2, $3, 'publication.disable', NULL, $4, $5
+      ) AS result`,
+      [
+        tenantA,
+        connectorA,
+        publicationA,
+        "disable-request-0001",
+        requestDigest,
+      ],
+    );
+    const retry = await database.query<{ result: unknown }>(
+      `SELECT control_publication_as_connector(
+        $1, $2, $3, 'publication.disable', NULL, $4, $5
+      ) AS result`,
+      [
+        tenantA,
+        connectorA,
+        publicationA,
+        "disable-request-0001",
+        requestDigest,
+      ],
+    );
+    expect(retry.rows).toEqual(first.rows);
+    await expect(
+      database.query(
+        `SELECT control_publication_as_connector(
+          $1, $2, $3, 'publication.disable', NULL, $4, $5
+        )`,
+        [
+          tenantA,
+          connectorA,
+          publicationA,
+          "disable-request-0001",
+          "f".repeat(64),
+        ],
+      ),
+    ).rejects.toThrow(/Idempotency key conflicts/u);
+    await database.query(
+      "DELETE FROM publications WHERE tenant_id = $1 AND id = $2",
+      [tenantA, publicationA],
+    );
+    const afterDeletion = await database.query<{ result: unknown }>(
+      `SELECT control_publication_as_connector(
+        $1, $2, $3, 'publication.disable', NULL, $4, $5
+      ) AS result`,
+      [
+        tenantA,
+        connectorA,
+        publicationA,
+        "disable-request-0001",
+        requestDigest,
+      ],
+    );
+    expect(afterDeletion.rows).toEqual(first.rows);
+
+    const audit = await database.query<{ action: string; metadata: unknown }>(
+      `SELECT action, metadata FROM audit_events
+       WHERE tenant_id = $1 AND principal_id = $2
+       ORDER BY created_at, action`,
+      [tenantA, connectorA],
+    );
+    expect(audit.rows.map((row) => row.action)).toEqual(
+      expect.arrayContaining([
+        "publication.source.attested",
+        "publication.disable",
+      ]),
+    );
+  });
+
+  it("binds grants and attested provenance to the resolved idempotent version", async () => {
+    const digest = digestDocument(document);
+    const provenance = {
+      sourceType: "anytype-object",
+      sourceDigest: "d".repeat(64),
+      sourcePointer: "object_pointer_1",
+    };
+    const query = `SELECT * FROM prepare_publication_version_authorized(
+      $1, $2, $3, $4, $5, 'page', 'create', '1.0', $6, $7,
+      $8::jsonb, $9::jsonb, 'authorized-publication-0001'
+    )`;
+    const first = await database.query<{
+      version_id: string;
+      duplicate: boolean;
+    }>(query, [
+      tenantA,
+      connectorA,
+      siteA,
+      publicationA,
+      versionA1,
+      digest,
+      bundlePath(tenantA, publicationA, versionA1, digest),
+      JSON.stringify(document),
+      JSON.stringify(provenance),
+    ]);
+    expect(first.rows).toEqual([
+      {
+        publication_id: publicationA,
+        version_id: versionA1,
+        bundle_path: bundlePath(tenantA, publicationA, versionA1, digest),
+        version_state: "draft",
+        duplicate: false,
+      },
+    ]);
+    const retry = await database.query<{
+      version_id: string;
+      duplicate: boolean;
+    }>(query, [
+      tenantA,
+      connectorA,
+      siteA,
+      publicationA,
+      versionA2,
+      digest,
+      bundlePath(tenantA, publicationA, versionA2, digest),
+      JSON.stringify(document),
+      JSON.stringify(provenance),
+    ]);
+    expect(retry.rows[0]).toMatchObject({
+      version_id: versionA1,
+      duplicate: true,
+    });
+    const grants = await database.query<{ connector_id: string }>(
+      "SELECT connector_id FROM publication_connector_grants WHERE tenant_id = $1 AND publication_id = $2",
+      [tenantA, publicationA],
+    );
+    expect(grants.rows).toEqual([{ connector_id: connectorA }]);
+    await expect(
+      database.query(query, [
+        tenantA,
+        connectorA,
+        siteA,
+        publicationA,
+        versionA2,
+        digest,
+        bundlePath(tenantA, publicationA, versionA2, digest),
+        JSON.stringify(document),
+        JSON.stringify({ ...provenance, sourceDigest: "e".repeat(64) }),
+      ]),
+    ).rejects.toThrow(/provenance/u);
+  });
+
+  it("resolves only the active page and its current-version media for the public reader", async () => {
+    await verifyAsset();
+    const digest = digestDocument(document);
+    await prepareVersion(versionA1, digest, "create");
+    await commitVersion(versionA1);
+
+    await database.exec("RESET ROLE");
+    await database.exec("SET ROLE knot_app");
+    const page = await database.query<{
+      tenant_id: string;
+      publication_id: string;
+      version_id: string;
+    }>(
+      "SELECT tenant_id, publication_id, version_id FROM resolve_public_reader_page($1, $2)",
+      ["site-a", "page"],
+    );
+    expect(page.rows).toEqual([
+      {
+        tenant_id: tenantA,
+        publication_id: publicationA,
+        version_id: versionA1,
+      },
+    ]);
+    const media = await database.query<{ sha256: string; version_id: string }>(
+      "SELECT sha256, version_id FROM resolve_public_reader_asset($1, $2, $3)",
+      ["site-a", publicationA, assetDigest],
+    );
+    expect(media.rows).toEqual([
+      { sha256: assetDigest, version_id: versionA1 },
+    ]);
+    expect(
+      (
+        await database.query(
+          "SELECT publication_id FROM resolve_public_reader_page($1, $2)",
+          ["site-b", "page"],
+        )
+      ).rows,
+    ).toEqual([]);
+
+    await database.query("SELECT set_config('app.tenant_id', $1, false)", [
+      tenantA,
+    ]);
+    await database.query("SELECT disable_publication($1, $2)", [
+      tenantA,
+      publicationA,
+    ]);
+    expect(
+      (
+        await database.query(
+          "SELECT publication_id FROM resolve_public_reader_page($1, $2)",
+          ["site-a", "page"],
+        )
+      ).rows,
+    ).toEqual([]);
+    expect(
+      (
+        await database.query(
+          "SELECT sha256 FROM resolve_public_reader_asset($1, $2, $3)",
+          ["site-a", publicationA, assetDigest],
+        )
+      ).rows,
+    ).toEqual([]);
   });
 
   async function verifyAsset() {

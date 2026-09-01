@@ -1,7 +1,7 @@
 # Publication lifecycle
 
-Status: implemented for review, not released. The public reader domain is still undecided, so this
-code must not be deployed as a public publishing service.
+Status: implemented for review, not released. The reader stays disabled until an operator selects
+and configures a separate registrable content domain.
 
 ## Data path
 
@@ -17,15 +17,19 @@ code must not be deployed as a public publishing service.
 6. Knot stores the canonical bundle under an immutable version key. One database transaction checks
    every referenced site asset, marks the version ready, and changes the active pointer.
 
+The connector receives an explicit grant for a publication it creates. Signed status and control
+requests require that grant as well as the relevant connector scope. Source digests and pointers
+supplied by a connector are stored only as audit provenance; they grant no authority.
+
 All connector control requests use the versioned signing protocol and replay nonce store. A cloud
 scope allows the request to reach this service. The local connector still decides what Anytype
 content it may read and publish.
 
 ## Visibility and deletion
 
-No public reader route exists in this change. `knot.imai.tech` remains the operator control plane.
-Reader HTML and assets stay blocked until a separate registrable domain passes the CSP, cookie,
-DNS, and cross-origin tests in the release plan.
+The candidate reader serves typed pages and current-version media only on `CONTENT_BASE_URL`.
+Console and API paths return `404` on that origin, and reader paths return `404` on the console
+origin. See [`public-reader.md`](public-reader.md) for the URL shape and deployment checks.
 
 Disable clears reader eligibility without deleting stored versions. Rollback selects an earlier
 ready version. Unpublish does three things in one database transaction:

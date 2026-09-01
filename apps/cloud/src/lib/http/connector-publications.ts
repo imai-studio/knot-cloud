@@ -3,9 +3,15 @@ import {
   assetUploadCreatedSchema,
   assetUploadRequestSchema,
   assetUploadResultSchema,
+  canonicalJson,
+  connectorPublicationControlRequestSchema,
+  connectorPublicationStatusRequestSchema,
+  connectorPublicationStatusSchema,
   protocolVersion,
+  publicationControlResultSchema,
   publicationCreatedSchema,
   publicationMutationSchema,
+  sha256Hex,
 } from "@imai/knot-cloud-contract";
 import { ZodError, type ZodType } from "zod";
 
@@ -30,7 +36,11 @@ const maximumControlBodyBytes = 1024 * 1024;
 export interface ConnectorPublicationDependencies {
   service: Pick<
     PublicationService,
-    "requestAssetUpload" | "commitAssetUpload" | "publish"
+    | "requestAssetUpload"
+    | "commitAssetUpload"
+    | "publish"
+    | "statusForConnector"
+    | "controlAsConnector"
   >;
   connectors: ConnectorRepository;
   nonces: ReplayNonceStore;
@@ -47,7 +57,11 @@ export function createConnectorPublicationHandlers(
   async function execute(
     request: Request,
     pathConnectorId: string,
-    operation: (body: Uint8Array, tenantId: string) => Promise<Response>,
+    operation: (
+      body: Uint8Array,
+      connector: { tenantId: string; connectorId: string; scopes: string[] },
+    ) => Promise<Response>,
+    requiredScope?: "publications.read" | "publications.write",
   ): Promise<Response> {
     try {
       if (
@@ -78,14 +92,14 @@ export function createConnectorPublicationHandlers(
           "The signed connector does not match the request path",
         );
       }
-      if (!connector.scopes.includes("publications.write")) {
+      if (requiredScope && !connector.scopes.includes(requiredScope)) {
         throw new HttpProblem(
           403,
           "forbidden",
-          "The connector cannot write publications",
+          "The connector does not have the required publication scope",
         );
       }
-      return await operation(body, connector.tenantId);
+      return await operation(body, connector);
     } catch (error) {
       if (error instanceof ConnectorAuthenticationError) {
         return problemResponse({
@@ -125,69 +139,155 @@ export function createConnectorPublicationHandlers(
 
   return {
     requestAsset(request: Request, connectorId: string) {
-      return execute(request, connectorId, async (body, tenantId) => {
-        const input = parseJson(body, assetUploadRequestSchema);
-        requireMatchingConnector(input.connectorId, connectorId);
-        const result = await dependencies.service.requestAssetUpload({
-          tenantId,
-          connectorId,
-          siteId: input.siteId,
-          sha256: input.sha256,
-          byteSize: input.byteSize,
-          contentType: input.contentType,
-          fileName: input.fileName,
-          idempotencyKey: input.idempotencyKey,
-        });
-        return jsonResponse(
-          assetUploadCreatedSchema.parse({
-            protocolVersion,
-            assetId: result.assetId,
-            uploadId: result.uploadId,
-            method: "PUT",
-            uploadUrl: result.uploadUrl,
-            requiredHeaders: result.requiredHeaders,
-            expiresAt: Math.floor(result.expiresAt.getTime() / 1_000),
-          }),
-          201,
-        );
-      });
+      return execute(
+        request,
+        connectorId,
+        async (body, connector) => {
+          const input = parseJson(body, assetUploadRequestSchema);
+          requireMatchingConnector(input.connectorId, connectorId);
+          const result = await dependencies.service.requestAssetUpload({
+            tenantId: connector.tenantId,
+            connectorId,
+            siteId: input.siteId,
+            sha256: input.sha256,
+            byteSize: input.byteSize,
+            contentType: input.contentType,
+            fileName: input.fileName,
+            idempotencyKey: input.idempotencyKey,
+          });
+          return jsonResponse(
+            assetUploadCreatedSchema.parse({
+              protocolVersion,
+              assetId: result.assetId,
+              uploadId: result.uploadId,
+              method: "PUT",
+              uploadUrl: result.uploadUrl,
+              requiredHeaders: result.requiredHeaders,
+              expiresAt: Math.floor(result.expiresAt.getTime() / 1_000),
+            }),
+            201,
+          );
+        },
+        "publications.write",
+      );
     },
 
     commitAsset(request: Request, connectorId: string) {
-      return execute(request, connectorId, async (body, tenantId) => {
-        const input = parseJson(body, assetUploadCommitSchema);
-        const result = await dependencies.service.commitAssetUpload({
-          tenantId,
-          connectorId,
-          uploadId: input.uploadId,
-          assetId: input.assetId,
-          expectedSha256: input.expectedSha256,
-          expectedByteSize: input.expectedByteSize,
-        });
-        return jsonResponse(
-          assetUploadResultSchema.parse({
-            status: "verified",
-            assetId: result.assetId,
-            sha256: result.sha256,
-            byteSize: result.byteSize,
-            verifiedAt: Math.floor(result.verifiedAt.getTime() / 1_000),
-          }),
-        );
-      });
+      return execute(
+        request,
+        connectorId,
+        async (body, connector) => {
+          const input = parseJson(body, assetUploadCommitSchema);
+          const result = await dependencies.service.commitAssetUpload({
+            tenantId: connector.tenantId,
+            connectorId,
+            uploadId: input.uploadId,
+            assetId: input.assetId,
+            expectedSha256: input.expectedSha256,
+            expectedByteSize: input.expectedByteSize,
+          });
+          return jsonResponse(
+            assetUploadResultSchema.parse({
+              status: "verified",
+              assetId: result.assetId,
+              sha256: result.sha256,
+              byteSize: result.byteSize,
+              verifiedAt: Math.floor(result.verifiedAt.getTime() / 1_000),
+            }),
+          );
+        },
+        "publications.write",
+      );
     },
 
     publish(request: Request, connectorId: string) {
-      return execute(request, connectorId, async (body, tenantId) => {
-        const mutation = parseJson(body, publicationMutationSchema);
-        requireMatchingConnector(mutation.connectorId, connectorId);
-        const result = await dependencies.service.publish({
-          tenantId,
-          connectorId,
-          mutation,
-        });
+      return execute(
+        request,
+        connectorId,
+        async (body, connector) => {
+          const mutation = parseJson(body, publicationMutationSchema);
+          requireMatchingConnector(mutation.connectorId, connectorId);
+          const result = await dependencies.service.publish({
+            tenantId: connector.tenantId,
+            connectorId,
+            mutation,
+          });
+          return jsonResponse(
+            publicationCreatedSchema.parse({ protocolVersion, ...result }),
+            201,
+          );
+        },
+        "publications.write",
+      );
+    },
+
+    status(request: Request, connectorId: string, publicationId: string) {
+      return execute(
+        request,
+        connectorId,
+        async (body, connector) => {
+          const input = parseJson(
+            body,
+            connectorPublicationStatusRequestSchema,
+          );
+          requireMatchingConnector(input.connectorId, connectorId);
+          if (input.publicationId !== publicationId) {
+            throw new HttpProblem(
+              403,
+              "forbidden",
+              "The publication body does not match the request path",
+            );
+          }
+          const status = await dependencies.service.statusForConnector({
+            tenantId: connector.tenantId,
+            connectorId,
+            publicationId,
+          });
+          return jsonResponse(
+            connectorPublicationStatusSchema.parse({
+              protocolVersion,
+              ...status,
+              updatedAt: Math.floor(status.updatedAt.getTime() / 1_000),
+            }),
+          );
+        },
+        "publications.read",
+      );
+    },
+
+    control(request: Request, connectorId: string, publicationId: string) {
+      return execute(request, connectorId, async (body, connector) => {
+        const input = parseJson(body, connectorPublicationControlRequestSchema);
+        requireMatchingConnector(input.connectorId, connectorId);
+        if (input.operation.publicationId !== publicationId) {
+          throw new HttpProblem(
+            403,
+            "forbidden",
+            "The publication body does not match the request path",
+          );
+        }
+        const requiredScope =
+          input.operation.type === "publication.unpublish"
+            ? "publications.unpublish"
+            : "publications.write";
+        if (!connector.scopes.includes(requiredScope)) {
+          throw new HttpProblem(
+            403,
+            "forbidden",
+            "The connector does not have the required publication scope",
+          );
+        }
+        const requestSha256 = await sha256Hex(canonicalJson(input));
         return jsonResponse(
-          publicationCreatedSchema.parse({ protocolVersion, ...result }),
-          201,
+          publicationControlResultSchema.parse(
+            await dependencies.service.controlAsConnector({
+              tenantId: connector.tenantId,
+              connectorId,
+              operation: input.operation,
+              idempotencyKey: input.idempotencyKey,
+              requestSha256,
+            }),
+          ),
         );
       });
     },

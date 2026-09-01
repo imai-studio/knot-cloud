@@ -1,7 +1,7 @@
 # Deployment runbook
 
-This runbook covers the current P0 foundation on Vercel with Neon and private Cloudflare R2. It
-does not publish content or install a local connector.
+This runbook covers the released P0 foundation and the unreleased publication candidate on Vercel
+with Neon and private Cloudflare R2. Release status remains authoritative in `releases.md`.
 
 ## Prerequisites
 
@@ -11,8 +11,8 @@ does not publish content or install a local connector.
 - a private Cloudflare R2 bucket and bucket-scoped S3 credentials
 - a Resend sending key restricted to the configured sender domain
 
-Do not provision a public R2 URL or content hostname. Public content needs a separate registrable
-domain and renderer decision before release.
+Do not provision a public R2 URL. Before enabling the publication candidate, select a separate
+registrable content domain and follow [`public-reader.md`](public-reader.md).
 
 ## Apply the database migration
 
@@ -36,7 +36,8 @@ the same route with `Authorization: Bearer <CRON_SECRET>`. Do not reuse `AUTH_SE
 pepper.
 
 Configure R2 by following [`object-storage.md`](object-storage.md). Keep both public access methods
-disabled on the bucket. `CONTENT_BASE_URL` is not part of the current environment contract.
+disabled on the bucket. Leave `CONTENT_BASE_URL` unset until the isolated reader deployment and
+domain are ready. Reader routes fail closed while it is absent.
 
 ## Verify the candidate
 
@@ -77,3 +78,8 @@ promotion.
 
 Confirm that the R2 smoke object was deleted and that the bucket still has no `r2.dev` URL or custom
 domain. Record the deployment and check results in [`p0-verification.md`](p0-verification.md).
+
+For a publication candidate, also run the origin-isolation, CSP, cookie, page, media, disable,
+rollback, destructive-unpublish, and deletion-drain checks in
+[`public-reader.md`](public-reader.md). Do not record P3 as released until those checks pass on the
+selected content domain.

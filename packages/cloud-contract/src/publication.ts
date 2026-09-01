@@ -4,6 +4,37 @@ import { idempotencyKeySchema, sha256Schema } from "./identifiers.js";
 import { protocolVersion } from "./protocol.js";
 
 const resourceIdSchema = z.uuid();
+const publicationSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9](?:[a-z0-9/_-]{0,198}[a-z0-9])?$/u)
+  .refine(
+    (value) => !value.includes("//"),
+    "Slug cannot contain consecutive slashes",
+  )
+  .refine(
+    (value) =>
+      !["api", "_next", "www", "admin", "health", "assets"].includes(
+        value.split("/")[0]!,
+      ),
+    "Slug uses a reserved prefix",
+  );
+
+export const publicationSourceProvenanceSchema = z
+  .object({
+    sourceType: z.enum([
+      "anytype-object",
+      "anytype-collection",
+      "anytype-chat",
+      "other",
+    ]),
+    sourceDigest: sha256Schema,
+    sourcePointer: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9_-]{1,512}$/u)
+      .optional(),
+  })
+  .strict();
 
 const textMarkSchema = z.enum([
   "bold",
@@ -96,24 +127,12 @@ export const publicationMutationSchema = z
     connectorId: resourceIdSchema,
     siteId: resourceIdSchema,
     publicationId: resourceIdSchema,
-    slug: z
-      .string()
-      .regex(/^[a-z0-9](?:[a-z0-9/_-]{0,198}[a-z0-9])?$/u)
-      .refine(
-        (value) => !value.includes("//"),
-        "Slug cannot contain consecutive slashes",
-      )
-      .refine(
-        (value) =>
-          !["api", "_next", "www", "admin", "health", "assets"].includes(
-            value.split("/")[0]!,
-          ),
-        "Slug uses a reserved prefix",
-      ),
+    slug: publicationSlugSchema,
     operation: z.enum(["create", "update"]),
     document: publicationDocumentSchema,
     contentSha256: sha256Schema,
     assetDigests: z.array(sha256Schema).max(1_000),
+    sourceProvenance: publicationSourceProvenanceSchema.optional(),
     idempotencyKey: idempotencyKeySchema,
   })
   .superRefine((value, context) => {
@@ -163,6 +182,35 @@ export const publicationControlOperationSchema = z.discriminatedUnion("type", [
     publicationId: resourceIdSchema,
   }),
 ]);
+
+export const connectorPublicationStatusRequestSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    connectorId: resourceIdSchema,
+    publicationId: resourceIdSchema,
+  })
+  .strict();
+
+export const connectorPublicationStatusSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    publicationId: resourceIdSchema,
+    siteId: resourceIdSchema,
+    slug: publicationSlugSchema,
+    state: z.enum(["draft", "ready", "disabled", "unpublished"]),
+    currentVersionId: resourceIdSchema.optional(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const connectorPublicationControlRequestSchema = z
+  .object({
+    protocolVersion: z.literal(protocolVersion),
+    connectorId: resourceIdSchema,
+    idempotencyKey: idempotencyKeySchema,
+    operation: publicationControlOperationSchema,
+  })
+  .strict();
 
 export const publicationControlResultSchema = z.discriminatedUnion("type", [
   z

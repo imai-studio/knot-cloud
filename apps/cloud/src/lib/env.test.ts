@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseCloudEnvironment,
+  parseContentEnvironment,
   parseEmailEnvironment,
   parseR2Environment,
   parseUpstashEnvironment,
@@ -59,6 +60,44 @@ describe("cloud environment", () => {
       "cloud.knot.test",
       "[::1]:3000",
     ]);
+  });
+});
+
+describe("content environment", () => {
+  it("accepts an isolated HTTPS reader origin", () => {
+    expect(
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://pages.example.org",
+      })?.baseUrl.origin,
+    ).toBe("https://pages.example.org");
+  });
+
+  it("stays disabled when no reader origin is configured", () => {
+    expect(
+      parseContentEnvironment({ APP_BASE_URL: "https://knot.imai.tech" }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a control-plane sibling, paths, and insecure remote origins", () => {
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://reader.imai.tech",
+      }),
+    ).toThrow(/separate registrable domain/u);
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "https://reader.example.org/path",
+      }),
+    ).toThrow(/bare origin/u);
+    expect(() =>
+      parseContentEnvironment({
+        APP_BASE_URL: "https://knot.imai.tech",
+        CONTENT_BASE_URL: "http://reader.example.org",
+      }),
+    ).toThrow(/HTTPS/u);
   });
 });
 

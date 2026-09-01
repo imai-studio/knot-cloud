@@ -64,14 +64,14 @@ The stored byte-size value must use canonical unsigned decimal syntax; whitespac
 points, exponent notation, and unsafe integers are rejected. Missing media type metadata falls
 back to `application/octet-stream`, while malformed media types fail closed.
 
-Every stored object and returned object descriptor uses:
+Every stored object and private object descriptor uses:
 
 ```text
 Cache-Control: private, no-store, max-age=0
 ```
 
-This policy keeps private reads out of browser and shared caches. A future public renderer must
-apply its own cache policy after it checks publication state.
+This policy keeps private reads out of browser and shared caches. The public reader applies its own
+`no-store` response after checking active publication state before and after the private read.
 
 ## Tombstones and deletion
 
@@ -83,11 +83,9 @@ Postgres decides whether content may be served. R2 does not. The intended deleti
 3. Pass the tombstoned tenant and stored key to `deleteTombstoned`.
 4. Mark the outbox row complete after R2 confirms deletion.
 
-`RevocableObjectReader` models step 2. Its visibility port must be backed by the tenant-scoped
-database state when routes are implemented. It returns the same `not-found` result for missing and
-tombstoned objects and does not call R2 for either state. It checks visibility again after the R2
-read and discards the body if a tombstone committed while the read was in flight. This makes
-revocation independent of R2 availability and cache invalidation.
+The reader resolves current-version eligibility before the R2 read and repeats the database lookup
+before returning the body. Missing, disabled, unpublished, and unlinked media all return the same
+`404`. This makes revocation independent of R2 availability and cache invalidation.
 
 `deleteTombstoned` accepts only typed tombstone records and verifies that every asset or publication
 bundle key belongs to its tenant. It removes duplicate keys and respects R2's 1,000-object batch
@@ -96,10 +94,9 @@ limit. A partial batch failure is an error, so the durable outbox retries it wit
 ## Public content domain gate
 
 Do not reuse `knot.imai.tech`, `knot.imai.studio`, or another dashboard subdomain as the public
-content origin. Before public publishing ships, choose a separate registrable domain, define its
-cookie and CSP boundary, and decide whether a renderer or an R2 custom domain owns cache control.
-Only then should deployment add a public hostname. `CONTENT_BASE_URL` is intentionally absent from
-the current environment contract.
+content origin. Before public publishing ships, choose a separate registrable domain and pass the
+cookie, CSP, DNS, disable, and unpublish checks in [`public-reader.md`](public-reader.md). R2 stays
+private; the application owns reader cache control.
 
 ## Verification
 

@@ -3,6 +3,7 @@ import type {
   DeletionOutboxRepository,
   PreparedAssetUpload,
   PreparedPublicationVersion,
+  ConnectorPublicationStatus,
   PublicationRecord,
   PublicationRepository,
   SiteRecord,
@@ -149,7 +150,7 @@ export class NeonPublicationRepository implements PublicationRepository {
   ): Promise<PreparedPublicationVersion> {
     const [rows = []] = await withTenant(input.tenantId, (transaction) => [
       transaction`
-        SELECT * FROM prepare_publication_version(
+        SELECT * FROM prepare_publication_version_authorized(
           ${input.tenantId}::uuid,
           ${input.connectorId}::uuid,
           ${input.siteId}::uuid,
@@ -161,6 +162,7 @@ export class NeonPublicationRepository implements PublicationRepository {
           ${input.contentSha256},
           ${input.bundlePath},
           ${JSON.stringify(input.document)}::jsonb,
+          ${JSON.stringify(input.sourceProvenance ?? {})}::jsonb,
           ${input.idempotencyKey}
         )
       `,
@@ -248,6 +250,71 @@ export class NeonPublicationRepository implements PublicationRepository {
     const row = rows[0] as { at: Date } | undefined;
     if (!row) throw new Error("Publication unpublish returned no state");
     return row.at;
+  }
+
+  async getConnectorStatus(input: {
+    tenantId: string;
+    connectorId: string;
+    publicationId: string;
+  }): Promise<ConnectorPublicationStatus> {
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT * FROM get_connector_publication_status(
+          ${input.tenantId}::uuid,
+          ${input.connectorId}::uuid,
+          ${input.publicationId}::uuid
+        )
+      `,
+    ]);
+    const row = rows[0] as
+      | {
+          publication_id: string;
+          site_id: string;
+          slug: string;
+          publication_status: ConnectorPublicationStatus["state"];
+          current_version_id: string | null;
+          updated_at: Date;
+        }
+      | undefined;
+    if (!row)
+      throw Object.assign(new Error("Publication not found"), {
+        code: "P0002",
+      });
+    return {
+      publicationId: row.publication_id,
+      siteId: row.site_id,
+      slug: row.slug,
+      state: row.publication_status,
+      currentVersionId: row.current_version_id ?? undefined,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async controlAsConnector(
+    input: Parameters<PublicationRepository["controlAsConnector"]>[0],
+  ) {
+    const versionId =
+      input.operation.type === "publication.rollback"
+        ? input.operation.versionId
+        : null;
+    const [rows = []] = await withTenant(input.tenantId, (transaction) => [
+      transaction`
+        SELECT control_publication_as_connector(
+          ${input.tenantId}::uuid,
+          ${input.connectorId}::uuid,
+          ${input.operation.publicationId}::uuid,
+          ${input.operation.type},
+          ${versionId}::uuid,
+          ${input.idempotencyKey},
+          ${input.requestSha256}
+        ) AS result
+      `,
+    ]);
+    const row = rows[0] as { result: unknown } | undefined;
+    if (!row) throw new Error("Publication control returned no state");
+    return row.result as Awaited<
+      ReturnType<PublicationRepository["controlAsConnector"]>
+    >;
   }
 }
 

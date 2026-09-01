@@ -36,8 +36,9 @@ The application accesses R2 through the AWS S3 client. It does not use Vercel Bl
 adapter is specific to Cloudflare R2. A general S3-compatible adapter remains planned.
 
 Public reader pages need a separate registrable domain from the operator console. No domain has
-been selected, so public publishing remains blocked. The reader origin will become a required
-setting only when that service is implemented.
+been selected, so public publishing remains blocked. The implementation candidate fails closed
+until `CONTENT_BASE_URL` is configured. See
+[`docs/public-reader.md`](docs/public-reader.md).
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for request paths and trust boundaries.
 
@@ -95,8 +96,10 @@ restricted `knot_app` role. See
   bootstrap, and tenant selection.
 - [`docs/deployment.md`](docs/deployment.md): deployment and provider preflight steps.
 - [`docs/object-storage.md`](docs/object-storage.md): private R2 keys, verification, and deletion.
-- [`docs/publication-lifecycle.md`](docs/publication-lifecycle.md): unreleased private publication
-  state, upload, rollback, and deletion behavior.
+- [`docs/publication-lifecycle.md`](docs/publication-lifecycle.md): unreleased publication upload,
+  controls, provenance, and deletion behavior.
+- [`docs/public-reader.md`](docs/public-reader.md): isolated reader routes and Vercel/self-hosted
+  deployment checks.
 - [`docs/p0-exit-criteria.md`](docs/p0-exit-criteria.md): completed and open P0 gates.
 - [`docs/p0-verification.md`](docs/p0-verification.md): test and deployment evidence.
 - [`docs/implementation-roadmap.md`](docs/implementation-roadmap.md): dependency-ordered planned

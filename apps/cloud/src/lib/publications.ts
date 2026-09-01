@@ -29,6 +29,15 @@ export interface PublicationRecord {
   updatedAt: Date;
 }
 
+export interface ConnectorPublicationStatus {
+  publicationId: string;
+  siteId: string;
+  slug: string;
+  state: "draft" | "ready" | "disabled" | "unpublished";
+  currentVersionId?: string;
+  updatedAt: Date;
+}
+
 export interface PreparedAssetUpload {
   uploadId: string;
   assetId: string;
@@ -95,6 +104,7 @@ export interface PublicationRepository {
     contentSha256: string;
     bundlePath: string;
     document: PublicationMutation["document"];
+    sourceProvenance: PublicationMutation["sourceProvenance"];
     idempotencyKey: string;
   }): Promise<PreparedPublicationVersion>;
   commitPublicationVersion(input: {
@@ -111,6 +121,25 @@ export interface PublicationRepository {
     versionId: string;
   }): Promise<string>;
   unpublish(input: { tenantId: string; publicationId: string }): Promise<Date>;
+  getConnectorStatus(input: {
+    tenantId: string;
+    connectorId: string;
+    publicationId: string;
+  }): Promise<ConnectorPublicationStatus>;
+  controlAsConnector(input: {
+    tenantId: string;
+    connectorId: string;
+    operation:
+      | { type: "publication.disable"; publicationId: string }
+      | {
+          type: "publication.rollback";
+          publicationId: string;
+          versionId: string;
+        }
+      | { type: "publication.unpublish"; publicationId: string };
+    idempotencyKey: string;
+    requestSha256: string;
+  }): Promise<PublicationControlResult>;
 }
 
 export class PublicationService {
@@ -223,6 +252,7 @@ export class PublicationService {
       contentSha256: digest,
       bundlePath: requestedPath,
       document: input.mutation.document,
+      sourceProvenance: input.mutation.sourceProvenance,
       idempotencyKey: input.mutation.idempotencyKey,
     });
     const stored = await this.objects.putPublicationBundleImmutable({
@@ -298,6 +328,31 @@ export class PublicationService {
         };
       }
     }
+  }
+
+  statusForConnector(input: {
+    tenantId: string;
+    connectorId: string;
+    publicationId: string;
+  }): Promise<ConnectorPublicationStatus> {
+    return this.repository.getConnectorStatus(input);
+  }
+
+  controlAsConnector(input: {
+    tenantId: string;
+    connectorId: string;
+    operation:
+      | { type: "publication.disable"; publicationId: string }
+      | {
+          type: "publication.rollback";
+          publicationId: string;
+          versionId: string;
+        }
+      | { type: "publication.unpublish"; publicationId: string };
+    idempotencyKey: string;
+    requestSha256: string;
+  }): Promise<PublicationControlResult> {
+    return this.repository.controlAsConnector(input);
   }
 }
 

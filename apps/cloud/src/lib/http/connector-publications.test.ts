@@ -31,6 +31,8 @@ function handlers(input?: { scopes?: string[]; connectorId?: string }) {
     requestAssetUpload,
     commitAssetUpload: vi.fn(),
     publish: vi.fn(),
+    statusForConnector: vi.fn(),
+    controlAsConnector: vi.fn(),
   };
   return {
     requestAssetUpload,
@@ -120,6 +122,8 @@ describe("connector publication HTTP service", () => {
         requestAssetUpload: vi.fn(),
         commitAssetUpload: vi.fn(),
         publish: vi.fn(),
+        statusForConnector: vi.fn(),
+        controlAsConnector: vi.fn(),
       },
       connectors: { findActiveConnector: () => Promise.resolve(undefined) },
       nonces: { claim: () => Promise.resolve("claimed") },
@@ -154,6 +158,8 @@ describe("connector publication HTTP service", () => {
         requestAssetUpload: vi.fn(),
         commitAssetUpload: vi.fn(),
         publish: vi.fn(),
+        statusForConnector: vi.fn(),
+        controlAsConnector: vi.fn(),
       },
       connectors: { findActiveConnector: () => Promise.resolve(undefined) },
       nonces: { claim: () => Promise.resolve("claimed") },
@@ -274,6 +280,101 @@ describe("connector publication HTTP service", () => {
     expect(body.code).toBe("dependency-unavailable");
     expect(body.retryable).toBe(true);
     expect(body.retryAfterSeconds).toBe(5);
+  });
+
+  it("returns status only with a read scope and an explicit service grant", async () => {
+    const service = handlers({ scopes: ["publications.read"] });
+    service.service.statusForConnector.mockResolvedValue({
+      publicationId: assetId,
+      siteId,
+      slug: "guide",
+      state: "ready",
+      currentVersionId: uploadId,
+      updatedAt: new Date("2026-09-01T00:00:00Z"),
+    });
+    const response = await service.handlers.status(
+      request(
+        `/api/v1/connectors/${connectorId}/publications/${assetId}/status`,
+        {
+          protocolVersion: "1.0",
+          connectorId,
+          publicationId: assetId,
+        },
+      ),
+      connectorId,
+      assetId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(service.service.statusForConnector).toHaveBeenCalledWith({
+      tenantId,
+      connectorId,
+      publicationId: assetId,
+    });
+
+    const denied = handlers({ scopes: ["publications.write"] });
+    const deniedResponse = await denied.handlers.status(
+      request(
+        `/api/v1/connectors/${connectorId}/publications/${assetId}/status`,
+        {
+          protocolVersion: "1.0",
+          connectorId,
+          publicationId: assetId,
+        },
+      ),
+      connectorId,
+      assetId,
+    );
+    expect(deniedResponse.status).toBe(403);
+    expect(denied.service.statusForConnector).not.toHaveBeenCalled();
+  });
+
+  it("requires the unpublish scope and binds control idempotency to the request", async () => {
+    const service = handlers({ scopes: ["publications.unpublish"] });
+    service.service.controlAsConnector.mockResolvedValue({
+      type: "publication.unpublish",
+      publicationId: assetId,
+      unpublishedAt: 1_788_220_800,
+    });
+    const body = {
+      protocolVersion: "1.0",
+      connectorId,
+      idempotencyKey: "unpublish-request-0001",
+      operation: {
+        type: "publication.unpublish",
+        publicationId: assetId,
+      },
+    };
+    const response = await service.handlers.control(
+      request(
+        `/api/v1/connectors/${connectorId}/publications/${assetId}/control`,
+        body,
+      ),
+      connectorId,
+      assetId,
+    );
+
+    expect(response.status).toBe(200);
+    expect(service.service.controlAsConnector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        connectorId,
+        idempotencyKey: "unpublish-request-0001",
+        requestSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      }),
+    );
+
+    const denied = handlers({ scopes: ["publications.write"] });
+    const deniedResponse = await denied.handlers.control(
+      request(
+        `/api/v1/connectors/${connectorId}/publications/${assetId}/control`,
+        body,
+      ),
+      connectorId,
+      assetId,
+    );
+    expect(deniedResponse.status).toBe(403);
+    expect(denied.service.controlAsConnector).not.toHaveBeenCalled();
   });
 });
 

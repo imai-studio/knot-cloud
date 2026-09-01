@@ -46,6 +46,9 @@ importers:
       "@imai/knot-cloud-contract":
         specifier: workspace:*
         version: link:../../packages/cloud-contract
+      "@imai/knot-publication-renderer":
+        specifier: workspace:*
+        version: link:../../packages/publication-renderer
       "@neondatabase/serverless":
         specifier: 1.1.0
         version: 1.1.0
@@ -134,6 +137,22 @@ importers:
       zod:
         specifier: 4.5.4
         version: 4.5.4
+    devDependencies:
+      "@types/node":
+        specifier: 24.10.1
+        version: 24.10.1
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@24.10.1)(vite@8.2.2(@types/node@24.10.1)(jiti@2.7.0))
+
+  packages/publication-renderer:
+    dependencies:
+      "@imai/knot-cloud-contract":
+        specifier: workspace:*
+        version: link:../cloud-contract
     devDependencies:
       "@types/node":
         specifier: 24.10.1

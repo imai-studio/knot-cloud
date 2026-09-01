@@ -67,10 +67,10 @@ copy of authoritative state.
 
 Publication bytes remain private in R2. Media uploads go directly to short-lived private R2 URLs so
 Vercel does not proxy large bodies. The service reads each object back and verifies its digest and
-length before it can appear in an active version. A future public renderer will read only the
-version referenced by the active Postgres publication pointer. Disable and unpublish first change
-database state so every service-controlled reader and asset route returns 404. The deletion worker
-then removes the R2 objects and records completion in the outbox.
+length before it can appear in an active version. The candidate public renderer accepts only the
+typed document schema and reads media only when it belongs to the active Postgres version. Disable
+and unpublish first change database state so every reader and media route returns `404`. The
+deletion worker then removes the R2 objects and records completion in the outbox.
 
 ## Public-content domain gate
 
@@ -79,8 +79,8 @@ Untrusted reader pages need a registrable domain separate from the operator cons
 plane. The exact reader domain has not been chosen.
 
 Public publishing cannot ship until the domain is recorded, DNS and cookies are scoped, and the
-renderer passes its CSP and cross-origin browser tests. The reader origin is not a required runtime
-setting before that service exists.
+renderer passes its CSP and cross-origin browser tests. The candidate routes return `404` while
+`CONTENT_BASE_URL` is absent or does not match the request origin.
 
 ## Self-hosting boundary
 

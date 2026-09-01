@@ -48,6 +48,10 @@ const upstashEnvironmentSchema = z.object({
 });
 
 const emailAddress = z.email();
+const contentEnvironmentSchema = z.object({
+  APP_BASE_URL: z.url(),
+  CONTENT_BASE_URL: optionalNonEmptyString(),
+});
 const emailEnvironmentSchema = z.object({
   EMAIL_FROM: z
     .string()
@@ -202,6 +206,46 @@ export function getEmailEnvironment() {
   return parseEmailEnvironment(process.env);
 }
 
+export interface ContentEnvironment {
+  baseUrl: URL;
+}
+
+export function getContentEnvironment(): ContentEnvironment | undefined {
+  return parseContentEnvironment(process.env);
+}
+
+export function parseContentEnvironment(
+  input: Record<string, string | undefined>,
+): ContentEnvironment | undefined {
+  const parsed = contentEnvironmentSchema.parse(input);
+  if (!parsed.CONTENT_BASE_URL) return undefined;
+  const application = new URL(parsed.APP_BASE_URL);
+  const content = new URL(parsed.CONTENT_BASE_URL);
+  if (
+    content.username ||
+    content.password ||
+    content.pathname !== "/" ||
+    content.search ||
+    content.hash
+  ) {
+    throw new Error("CONTENT_BASE_URL must be a bare origin");
+  }
+  if (!isLocalHostname(content.hostname) && content.protocol !== "https:") {
+    throw new Error("CONTENT_BASE_URL must use HTTPS");
+  }
+  if (
+    content.origin === application.origin ||
+    (!isLocalHostname(content.hostname) &&
+      approximateRegistrableDomain(content.hostname) ===
+        approximateRegistrableDomain(application.hostname))
+  ) {
+    throw new Error(
+      "CONTENT_BASE_URL must use a separate registrable domain from APP_BASE_URL",
+    );
+  }
+  return { baseUrl: content };
+}
+
 export function parseEmailEnvironment(
   input: Record<string, string | undefined>,
 ) {
@@ -226,4 +270,15 @@ function normalizeEmail(email: string): string {
 function nonBlank(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
+  );
+}
+
+function approximateRegistrableDomain(hostname: string): string {
+  const labels = hostname.toLowerCase().split(".").filter(Boolean);
+  return labels.slice(-2).join(".");
 }

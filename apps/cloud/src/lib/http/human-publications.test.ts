@@ -156,6 +156,8 @@ function publicationRepository(
     disable: vi.fn(),
     rollback: vi.fn(),
     unpublish: vi.fn(),
+    getConnectorStatus: vi.fn(),
+    controlAsConnector: vi.fn(),
     ...overrides,
   };
 }
