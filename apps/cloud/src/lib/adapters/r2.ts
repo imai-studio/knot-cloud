@@ -8,7 +8,6 @@ import {
   S3Client,
   S3ServiceException,
 } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { getR2Environment } from "@/lib/env";
 import {
@@ -20,6 +19,8 @@ import {
   type StoredObjectDescriptor,
   type TombstonedObject,
 } from "@/lib/ports";
+
+import { createPresignedPut } from "./r2-presigned";
 
 const deleteBatchSize = 1_000;
 const maximumAssetBytes = 104_857_600;
@@ -381,33 +382,22 @@ export class R2PrivateObjectStore implements ObjectStore {
     ) {
       throw new TypeError("expiresInSeconds must be between 30 and 900");
     }
-    const command = new PutObjectCommand({
-      Bucket: this.#bucket,
-      Key: key,
-      ContentLength: input.contentLength,
-      ContentType: input.contentType,
-      CacheControl: privateObjectCacheControl,
-      IfNoneMatch: "*",
-      Metadata: {
-        "byte-size": String(input.contentLength),
-        kind: "asset",
-        sha256: input.locator.sha256,
-        "tenant-id": input.locator.tenantId,
-      },
-    });
-    const now = Date.now();
-    return {
-      uploadUrl: await getSignedUrl(this.#client, command, {
-        expiresIn: input.expiresInSeconds,
-      }),
-      requiredHeaders: {
-        "cache-control": privateObjectCacheControl,
-        "content-length": String(input.contentLength),
-        "content-type": input.contentType,
-        "if-none-match": "*",
-      },
-      expiresAt: new Date(now + input.expiresInSeconds * 1_000),
+    const metadata = {
+      "byte-size": String(input.contentLength),
+      kind: "asset",
+      sha256: input.locator.sha256,
+      "tenant-id": input.locator.tenantId,
     };
+    return createPresignedPut({
+      client: this.#client,
+      bucket: this.#bucket,
+      key,
+      contentLength: input.contentLength,
+      contentType: input.contentType,
+      cacheControl: privateObjectCacheControl,
+      metadata,
+      expiresInSeconds: input.expiresInSeconds,
+    });
   }
 
   async putImmutable(input: {
