@@ -71,6 +71,14 @@ describe("publication lifecycle migration", () => {
       INSERT INTO sites (id, tenant_id, name, slug) VALUES
         ('${siteA}', '${tenantA}', 'Site A', 'site-a'),
         ('${siteB}', '${tenantB}', 'Site B', 'site-b');
+      INSERT INTO connector_site_grants (tenant_id, connector_id, site_id) VALUES
+        ('${tenantA}', '${connectorA}', '${siteA}'),
+        ('${tenantA}', '${connectorA2}', '${siteA}'),
+        ('${tenantB}', '${connectorB}', '${siteB}');
+      INSERT INTO connector_slug_grants (tenant_id, connector_id, slug_grant) VALUES
+        ('${tenantA}', '${connectorA}', 'page'),
+        ('${tenantA}', '${connectorA2}', 'page'),
+        ('${tenantB}', '${connectorB}', 'page');
       SET ROLE knot_app;
       SELECT set_config('app.tenant_id', '${tenantA}', false);
     `);
@@ -164,6 +172,51 @@ describe("publication lifecycle migration", () => {
       ],
     );
     expect(committed.rows).toEqual([{ asset_id: assetA }]);
+  });
+
+  it("rejects asset uploads outside the connector site grant", async () => {
+    await database.exec(`
+      DELETE FROM connector_site_grants
+      WHERE tenant_id = '${tenantA}' AND connector_id = '${connectorA}'
+    `);
+
+    await expect(
+      database.query(
+        `SELECT * FROM prepare_asset_upload(
+          $1, $2, $3, $4, $5, $6, $7, 'image/png', $8, 'asset.png',
+          'asset-upload-site-grant', now() + interval '10 minutes'
+        )`,
+        [
+          tenantA,
+          connectorA,
+          siteA,
+          uploadA,
+          assetA,
+          assetDigest,
+          assetPath(tenantA, assetDigest),
+          assetBytes.byteLength,
+        ],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+
+    await expect(
+      database.query(
+        `SELECT * FROM prepare_asset_upload(
+          $1, $2, $3, $4, $5, $6, $7, 'image/png', $8, 'asset.png',
+          'asset-upload-foreign-site', now() + interval '10 minutes'
+        )`,
+        [
+          tenantA,
+          connectorA,
+          siteB,
+          uploadA,
+          assetA,
+          assetDigest,
+          assetPath(tenantA, assetDigest),
+          assetBytes.byteLength,
+        ],
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
   });
 
   it("rejects cross-tenant publication mutations before writing state", async () => {
@@ -763,6 +816,76 @@ describe("publication lifecycle migration", () => {
         JSON.stringify({ ...provenance, sourceDigest: "e".repeat(64) }),
       ]),
     ).rejects.toThrow(/provenance/u);
+  });
+
+  it("rejects publications outside connector site and slug grants", async () => {
+    const digest = digestDocument(document);
+    const prepare = (slug: string, versionId: string) =>
+      database.query(
+        `SELECT * FROM prepare_publication_version_authorized(
+          $1, $2, $3, $4, $5, $6, 'create', '1.0', $7, $8,
+          $9::jsonb, '{}'::jsonb, $10
+        )`,
+        [
+          tenantA,
+          connectorA,
+          siteA,
+          publicationA,
+          versionId,
+          slug,
+          digest,
+          bundlePath(tenantA, publicationA, versionId, digest),
+          JSON.stringify(document),
+          `target-grant-${versionId.slice(-4)}`,
+        ],
+      );
+
+    await expect(prepare("private/page", versionA1)).rejects.toMatchObject({
+      code: "42501",
+    });
+
+    await database.exec(`
+      DELETE FROM connector_site_grants
+      WHERE tenant_id = '${tenantA}' AND connector_id = '${connectorA}'
+    `);
+    await expect(prepare("page", versionA2)).rejects.toMatchObject({
+      code: "42501",
+    });
+  });
+
+  it("accepts publications covered by a connector slug prefix grant", async () => {
+    const digest = digestDocument(document);
+    await database.query(
+      `INSERT INTO connector_slug_grants (tenant_id, connector_id, slug_grant)
+       VALUES ($1, $2, 'public/*')`,
+      [tenantA, connectorA],
+    );
+
+    const prepared = await database.query(
+      `SELECT * FROM prepare_publication_version_authorized(
+        $1, $2, $3, $4, $5, 'public/page', 'create', '1.0', $6, $7,
+        $8::jsonb, '{}'::jsonb, 'prefix-grant-publication-0001'
+      )`,
+      [
+        tenantA,
+        connectorA,
+        siteA,
+        publicationA,
+        versionA1,
+        digest,
+        bundlePath(tenantA, publicationA, versionA1, digest),
+        JSON.stringify(document),
+      ],
+    );
+
+    expect(prepared.rows).toEqual([
+      expect.objectContaining({
+        publication_id: publicationA,
+        version_id: versionA1,
+        version_state: "draft",
+        duplicate: false,
+      }),
+    ]);
   });
 
   it("resolves only the active page and its current-version media for the public reader", async () => {
