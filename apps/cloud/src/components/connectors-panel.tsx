@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 import { scopeNameSchema, type PairingScope } from "@imai/knot-cloud-contract";
-import { Check, Copy, KeyRound, RefreshCw, ShieldX } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  ShieldX,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -159,48 +167,53 @@ export function ConnectorsPanel({
     }
   }
 
+  const hasConnectors = connectors.length > 0;
+
   return (
     <div className="max-w-4xl">
       <Badge variant="outline" className="mb-3 rounded-full">
         Connector access
       </Badge>
       <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-        Connect local Knot
+        {hasConnectors ? "Connectors" : "Connect local Knot"}
       </h1>
       <p className="mt-2 max-w-2xl leading-7 text-muted-foreground">
-        Pair one local runtime at a time. The private signing key and Anytype
-        authority stay on that machine.
+        {hasConnectors
+          ? "Review the local runtimes connected to this workspace and the access each one holds."
+          : "Pair one local runtime at a time. The private signing key and Anytype authority stay on that machine."}
       </p>
 
-      <ol className="mt-8 grid border-y sm:grid-cols-3 sm:divide-x">
-        {[
-          {
-            title: "Generate a local identity",
-            detail:
-              "On the agent machine, have Knot generate or show its connector name and 43-character public key.",
-          },
-          {
-            title: "Choose cloud access",
-            detail:
-              "Paste only the public key, then select the exact scopes and known sites this connector needs.",
-          },
-          {
-            title: "Finish on the same machine",
-            detail:
-              "Copy the one-time pairing bundle back to local Knot. Approve only after both public keys match.",
-          },
-        ].map((step, index) => (
-          <li className="px-1 py-5 sm:px-5" key={step.title}>
-            <p className="font-mono text-xs text-muted-foreground">
-              Step {index + 1}
-            </p>
-            <h2 className="mt-2 font-medium">{step.title}</h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              {step.detail}
-            </p>
-          </li>
-        ))}
-      </ol>
+      {!hasConnectors ? (
+        <ol className="mt-8 grid border-y sm:grid-cols-3 sm:divide-x">
+          {[
+            {
+              title: "Generate a local identity",
+              detail:
+                "On the agent machine, have Knot generate or show its connector name and 43-character public key.",
+            },
+            {
+              title: "Choose cloud access",
+              detail:
+                "Paste only the public key, then select the exact scopes and known sites this connector needs.",
+            },
+            {
+              title: "Finish on the same machine",
+              detail:
+                "Copy the one-time pairing bundle back to local Knot. Approve only after both public keys match.",
+            },
+          ].map((step, index) => (
+            <li className="px-1 py-5 sm:px-5" key={step.title}>
+              <p className="font-mono text-xs text-muted-foreground">
+                Step {index + 1}
+              </p>
+              <h2 className="mt-2 font-medium">{step.title}</h2>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                {step.detail}
+              </p>
+            </li>
+          ))}
+        </ol>
+      ) : null}
 
       {error ? (
         <Alert variant="destructive" className="mt-6">
@@ -257,130 +270,176 @@ export function ConnectorsPanel({
         </Alert>
       ) : null}
 
+      {hasConnectors ? (
+        <ConnectorInventory
+          busy={busy}
+          canManage={canManage}
+          connectors={connectors}
+          sites={sites}
+          onRename={rename}
+          onRevoke={revoke}
+        />
+      ) : null}
+
       {canManage ? (
-        <section className="mt-10 border-t pt-8">
-          <h2 className="font-heading text-xl font-medium">
-            Step 2: configure the pairing request
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Enter the values shown by local Knot. Do not paste a private key,
-            Anytype credential, or API key here.
-          </p>
-          <form className="mt-5 grid gap-5" onSubmit={createPairing}>
-            <div className="grid gap-2 sm:grid-cols-2 sm:gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="connector-name">Connector name</Label>
-                <Input
-                  id="connector-name"
-                  maxLength={100}
-                  placeholder="Raj's MacBook"
-                  required
-                  value={connectorName}
-                  onChange={(event) => setConnectorName(event.target.value)}
-                />
+        <details
+          className={
+            hasConnectors ? "group mt-10 rounded-xl border bg-card" : "mt-10"
+          }
+          open={!hasConnectors}
+        >
+          {hasConnectors ? (
+            <summary className="flex min-h-16 cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-5 py-4 transition-[background-color] hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 sm:px-6">
+              <span className="flex items-center gap-3">
+                <span className="flex size-9 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
+                  <Plus className="size-4" />
+                </span>
+                <span>
+                  <span className="block font-medium">
+                    Pair another connector
+                  </span>
+                  <span className="mt-0.5 block text-sm text-muted-foreground">
+                    Add a local runtime and choose its access.
+                  </span>
+                </span>
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+            </summary>
+          ) : null}
+          <section
+            className={
+              hasConnectors
+                ? "border-t px-5 pb-6 pt-6 sm:px-6"
+                : "border-t pt-8"
+            }
+          >
+            <h2 className="font-heading text-xl font-medium">
+              Configure the pairing request
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
+              Enter the values shown by local Knot. Do not paste a private key,
+              Anytype credential, or API key here.
+            </p>
+            <form className="mt-5 grid gap-5" onSubmit={createPairing}>
+              <div className="grid gap-2 sm:grid-cols-2 sm:gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="connector-name">Connector name</Label>
+                  <Input
+                    id="connector-name"
+                    maxLength={100}
+                    placeholder="Raj's MacBook"
+                    required
+                    value={connectorName}
+                    onChange={(event) => setConnectorName(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="connector-public-key">Public key</Label>
+                  <Input
+                    id="connector-public-key"
+                    className="font-mono text-xs"
+                    pattern="[A-Za-z0-9_-]{43}"
+                    placeholder="43-character base64url key"
+                    required
+                    value={publicKey}
+                    onChange={(event) => setPublicKey(event.target.value)}
+                  />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="connector-public-key">Public key</Label>
-                <Input
-                  id="connector-public-key"
-                  className="font-mono text-xs"
-                  pattern="[A-Za-z0-9_-]{43}"
-                  placeholder="43-character base64url key"
-                  required
-                  value={publicKey}
-                  onChange={(event) => setPublicKey(event.target.value)}
-                />
-              </div>
-            </div>
-            <fieldset>
-              <legend className="text-sm font-medium">Requested scopes</legend>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {scopeNameSchema.options.map((scope) => (
-                  <label
-                    className="flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-sm"
-                    key={scope}
-                  >
-                    <input
-                      checked={selectedScopes.includes(scope)}
-                      type="checkbox"
-                      onChange={(event) =>
-                        setSelectedScopes((current) =>
-                          event.target.checked
-                            ? [...current, scope]
-                            : current.filter((value) => value !== scope),
-                        )
-                      }
-                    />
-                    <span className="font-mono text-xs">{scope}</span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <fieldset>
-              <legend className="text-sm font-medium">
-                Requested sites <span className="font-normal">(optional)</span>
-              </legend>
-              {sites.length === 0 ? (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  This workspace has no sites. Site access will remain empty.
-                </p>
-              ) : (
+              <fieldset>
+                <legend className="text-sm font-medium">
+                  Requested scopes
+                </legend>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {sites.map((site) => (
+                  {scopeNameSchema.options.map((scope) => (
                     <label
-                      className="flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm"
-                      key={site.id}
+                      className="flex min-h-9 items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+                      key={scope}
                     >
                       <input
-                        checked={selectedSiteIds.includes(site.id)}
+                        checked={selectedScopes.includes(scope)}
                         type="checkbox"
                         onChange={(event) =>
-                          setSelectedSiteIds((current) =>
+                          setSelectedScopes((current) =>
                             event.target.checked
-                              ? [...current, site.id]
-                              : current.filter((value) => value !== site.id),
+                              ? [...current, scope]
+                              : current.filter((value) => value !== scope),
                           )
                         }
                       />
-                      <span>
-                        <span className="block font-medium">{site.name}</span>
-                        <span className="block font-mono text-xs text-muted-foreground">
-                          {site.slug}
-                        </span>
-                      </span>
+                      <span className="font-mono text-xs">{scope}</span>
                     </label>
                   ))}
                 </div>
-              )}
-            </fieldset>
-            <div className="space-y-2">
-              <Label htmlFor="connector-slugs">
-                Publication paths{" "}
-                <span className="font-normal">(advanced, optional)</span>
-              </Label>
-              <Input
-                id="connector-slugs"
-                placeholder="notes, projects/imai/*"
-                value={slugGrants}
-                onChange={(event) => setSlugGrants(event.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Separate paths with commas. A trailing /* includes descendants,
-                so use it only when the connector needs that whole path.
-              </p>
-            </div>
-            <Button
-              className="w-fit"
-              disabled={busy !== null || selectedScopes.length === 0}
-              type="submit"
-            >
-              {busy === "create" ? (
-                <RefreshCw className="animate-spin" />
-              ) : null}
-              Create one-time pairing request
-            </Button>
-          </form>
-        </section>
+              </fieldset>
+              <fieldset>
+                <legend className="text-sm font-medium">
+                  Requested sites{" "}
+                  <span className="font-normal">(optional)</span>
+                </legend>
+                {sites.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    This workspace has no sites. Site access will remain empty.
+                  </p>
+                ) : (
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {sites.map((site) => (
+                      <label
+                        className="flex min-h-11 items-center gap-3 rounded-lg border px-3 py-2 text-sm"
+                        key={site.id}
+                      >
+                        <input
+                          checked={selectedSiteIds.includes(site.id)}
+                          type="checkbox"
+                          onChange={(event) =>
+                            setSelectedSiteIds((current) =>
+                              event.target.checked
+                                ? [...current, site.id]
+                                : current.filter((value) => value !== site.id),
+                            )
+                          }
+                        />
+                        <span>
+                          <span className="block font-medium">{site.name}</span>
+                          <span className="block font-mono text-xs text-muted-foreground">
+                            {site.slug}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+              <div className="space-y-2">
+                <Label htmlFor="connector-slugs">
+                  Publication paths{" "}
+                  <span className="font-normal">(advanced, optional)</span>
+                </Label>
+                <Input
+                  id="connector-slugs"
+                  placeholder="notes, projects/imai/*"
+                  value={slugGrants}
+                  onChange={(event) => setSlugGrants(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Separate paths with commas. A trailing /* includes
+                  descendants, so use it only when the connector needs that
+                  whole path.
+                </p>
+              </div>
+              <Button
+                className="w-fit"
+                disabled={busy !== null || selectedScopes.length === 0}
+                type="submit"
+              >
+                {busy === "create" ? (
+                  <RefreshCw className="animate-spin" />
+                ) : null}
+                Create one-time pairing request
+              </Button>
+            </form>
+          </section>
+        </details>
       ) : null}
 
       {canManage ? (
@@ -490,78 +549,133 @@ export function ConnectorsPanel({
         </section>
       ) : null}
 
-      <section className="mt-10 border-t pt-8">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2 className="font-heading text-xl font-medium">
-              Workspace connectors
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Revocation is permanent for a public key.
-            </p>
-          </div>
-          <Badge variant="secondary">{connectors.length}</Badge>
+      {!hasConnectors ? (
+        <ConnectorInventory
+          busy={busy}
+          canManage={canManage}
+          connectors={connectors}
+          sites={sites}
+          onRename={rename}
+          onRevoke={revoke}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ConnectorInventory({
+  busy,
+  canManage,
+  connectors,
+  sites,
+  onRename,
+  onRevoke,
+}: {
+  busy: string | null;
+  canManage: boolean;
+  connectors: SerializedConnector[];
+  sites: PairingSite[];
+  onRename: (connector: SerializedConnector, form: FormData) => Promise<void>;
+  onRevoke: (connector: SerializedConnector) => Promise<void>;
+}) {
+  const activeCount = connectors.filter(
+    (connector) => !connector.revokedAt,
+  ).length;
+  const orderedConnectors = [...connectors].sort(
+    (left, right) =>
+      Number(Boolean(left.revokedAt)) - Number(Boolean(right.revokedAt)),
+  );
+
+  return (
+    <section className="mt-8" aria-labelledby="workspace-connectors-heading">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2
+            className="font-heading text-2xl font-medium"
+            id="workspace-connectors-heading"
+          >
+            Your connectors
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {connectors.length === 0
+              ? "Approved runtimes will appear here."
+              : `${activeCount} active of ${connectors.length} total`}
+          </p>
         </div>
-        <div className="mt-5 divide-y border-y">
-          {connectors.length === 0 ? (
-            <p className="py-6 text-sm text-muted-foreground">
-              No connector has been approved.
-            </p>
-          ) : (
-            connectors.map((connector) => (
-              <article className="py-6" key={connector.id}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="font-medium">{connector.name}</h3>
-                    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
-                      {connector.publicKey}
-                    </p>
-                  </div>
-                  <Badge
-                    variant={connector.revokedAt ? "destructive" : "outline"}
-                  >
-                    {connector.revokedAt ? "Revoked" : "Active"}
+        {connectors.length > 0 ? (
+          <Badge variant="secondary">{activeCount} active</Badge>
+        ) : null}
+      </div>
+      <div className="mt-5 grid gap-3">
+        {connectors.length === 0 ? (
+          <div className="rounded-xl border bg-card px-5 py-8 text-sm text-muted-foreground">
+            No connector has been approved.
+          </div>
+        ) : (
+          orderedConnectors.map((connector) => (
+            <article
+              className="rounded-xl border bg-card p-5 sm:p-6"
+              key={connector.id}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h3 className="font-heading text-lg font-medium">
+                    {connector.name}
+                  </h3>
+                  <p className="mt-1 max-w-xl truncate font-mono text-xs text-muted-foreground">
+                    {connector.publicKey}
+                  </p>
+                </div>
+                <Badge
+                  variant={connector.revokedAt ? "destructive" : "outline"}
+                >
+                  {connector.revokedAt ? "Revoked" : "Active"}
+                </Badge>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {connector.scopes.map((scope) => (
+                  <Badge key={scope} variant="secondary">
+                    {scope}
                   </Badge>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {connector.scopes.map((scope) => (
-                    <Badge key={scope} variant="secondary">
-                      {scope}
-                    </Badge>
-                  ))}
-                </div>
-                {connector.siteIds.length > 0 ||
-                connector.slugGrants.length > 0 ? (
-                  <dl className="mt-3 grid gap-2 text-xs text-muted-foreground">
-                    {connector.siteIds.length > 0 ? (
-                      <div>
-                        <dt className="font-medium text-foreground">Sites</dt>
-                        <dd>
-                          {connector.siteIds
-                            .map(
-                              (siteId) =>
-                                sites.find((site) => site.id === siteId)
-                                  ?.name ?? siteId,
-                            )
-                            .join(", ")}
-                        </dd>
-                      </div>
-                    ) : null}
-                    {connector.slugGrants.length > 0 ? (
-                      <div>
-                        <dt className="font-medium text-foreground">Slugs</dt>
-                        <dd className="font-mono">
-                          {connector.slugGrants.join(", ")}
-                        </dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                ) : null}
-                {canManage && !connector.revokedAt ? (
-                  <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
+                ))}
+              </div>
+              {connector.siteIds.length > 0 ||
+              connector.slugGrants.length > 0 ? (
+                <dl className="mt-4 grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+                  {connector.siteIds.length > 0 ? (
+                    <div>
+                      <dt className="font-medium text-foreground">Sites</dt>
+                      <dd className="mt-1">
+                        {connector.siteIds
+                          .map(
+                            (siteId) =>
+                              sites.find((site) => site.id === siteId)?.name ??
+                              siteId,
+                          )
+                          .join(", ")}
+                      </dd>
+                    </div>
+                  ) : null}
+                  {connector.slugGrants.length > 0 ? (
+                    <div>
+                      <dt className="font-medium text-foreground">Paths</dt>
+                      <dd className="mt-1 font-mono">
+                        {connector.slugGrants.join(", ")}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : null}
+              {canManage && !connector.revokedAt ? (
+                <details className="group mt-5 border-t pt-4">
+                  <summary className="flex min-h-10 w-fit cursor-pointer list-none items-center gap-2 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-[background-color,color] hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                    Manage connector
+                    <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
                     <form
                       className="flex flex-1 items-end gap-2"
-                      action={(form) => rename(connector, form)}
+                      action={(form) => onRename(connector, form)}
                     >
                       <div className="flex-1 space-y-2">
                         <Label htmlFor={`name-${connector.id}`}>
@@ -586,18 +700,18 @@ export function ConnectorsPanel({
                     <Button
                       disabled={busy !== null}
                       variant="destructive"
-                      onClick={() => revoke(connector)}
+                      onClick={() => onRevoke(connector)}
                     >
                       Revoke
                     </Button>
                   </div>
-                ) : null}
-              </article>
-            ))
-          )}
-        </div>
-      </section>
-    </div>
+                </details>
+              ) : null}
+            </article>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
